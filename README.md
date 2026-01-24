@@ -9,6 +9,14 @@ A fully compliant TOML v1.1.0 parser for Zig 0.15.2 with v1.0.0 compatibility mo
   - Local time with omitted seconds (assumes `:00`)
 - **TOML v1.0.0** - Strict compatibility mode with v1.0 restrictions
 
+## Status
+
+| Aspect | Info |
+|--------|------|
+| API Stability | Beta |
+| Zig Version | 0.15.2+ |
+| Platforms | Linux, macOS, Windows |
+
 ## Features
 
 - Full TOML v1.1.0 compliance with typed value tree output
