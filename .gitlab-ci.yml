@@ -99,8 +99,19 @@ toml-test-conformance:
       echo "Decoder: ./zig-out/bin/toml-test-decoder"
       echo "toml-test version: $(./toml-test --version 2>&1 || echo 'unknown')"
     # Run conformance tests
-    # -skip flags for known TOML 1.1 features not yet in toml-test v1.x valid tests
-    - ./toml-test ./zig-out/bin/toml-test-decoder 2>&1 | tee conformance-results.txt
+    # Skip tests for TOML 1.1 features that this parser supports:
+    # - Newlines in inline tables (TOML 1.1)
+    # - Trailing commas in inline tables (TOML 1.1)
+    # - Omitting seconds in local time/datetime (TOML 1.1)
+    # - Hex escape sequences \xHH (TOML 1.1)
+    - |
+      ./toml-test \
+        -skip='invalid/inline-table/linebreak' \
+        -skip='invalid/inline-table/trailing-comma' \
+        -skip='invalid/local-datetime/no-secs' \
+        -skip='invalid/local-time/no-secs' \
+        -skip='invalid/string/basic-byte-escapes' \
+        ./zig-out/bin/toml-test-decoder 2>&1 | tee conformance-results.txt
     # Extract pass/fail summary
     - |
       if grep -q "passed" conformance-results.txt; then
