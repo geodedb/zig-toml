@@ -1,31 +1,47 @@
 # GitLab CI/CD Configuration
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2024-2025 CodePros
-#
-# NOTE: Build/test skipped - requires Zig 0.15.x which is not yet released.
-# Security scanning is enabled.
 
 include:
+  # Zig build, test, and formatting
+  - component: gitlab.com/devnw/ci-catalog/zig-format@~latest
+    inputs:
+      stage: lint
+      zig_version: '0.15.1'
+      paths: 'src/ tests/ examples/'
+
+  - component: gitlab.com/devnw/ci-catalog/zig-build@~latest
+    inputs:
+      stage: build
+      zig_version: '0.15.1'
+      artifact_paths: 'zig-out/'
+      artifact_expire: '1 week'
+
+  - component: gitlab.com/devnw/ci-catalog/zig-test@~latest
+    inputs:
+      stage: test
+      zig_version: '0.15.1'
+
   # Security scanning (Advanced SAST enabled by default)
-  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-sast@~latest
     inputs:
       stage: security
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@~latest
     inputs:
       stage: security
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@~latest
     inputs:
       stage: security
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@~latest
 
   # SBOM generation and scanning
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@~latest
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@~latest
     inputs:
       allow_failure: true
 
   # Release creation
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@~latest
     inputs:
       stage: release
 
@@ -35,7 +51,65 @@ default:
     - linux
 
 stages:
+  - lint
+  - build
+  - test
+  - conformance
   - security
   - sbom
   - release
 
+variables:
+  TOML_TEST_VERSION: "1.5.0"
+
+# Run official toml-test conformance suite against the decoder
+toml-test-conformance:
+  stage: conformance
+  image: ubuntu:24.04
+  variables:
+    ZIG_VERSION: "0.15.1"
+  needs:
+    - job: "zig-build-0.15.1"
+      artifacts: true
+  cache:
+    key: "linux-zig-${ZIG_VERSION}"
+    paths:
+      - zig-${ZIG_VERSION}/
+  before_script:
+    - apt-get update && apt-get install -y curl xz-utils
+    # Install Zig
+    - |
+      if [ ! -f "zig-${ZIG_VERSION}/zig" ]; then
+        ARCHIVE_NAME="zig-x86_64-linux-${ZIG_VERSION}"
+        curl -L "https://ziglang.org/download/${ZIG_VERSION}/${ARCHIVE_NAME}.tar.xz" | tar -xJ
+        mv "${ARCHIVE_NAME}" "zig-${ZIG_VERSION}"
+      fi
+    - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
+    # Download toml-test binary from GitHub releases
+    - |
+      echo "Downloading toml-test v${TOML_TEST_VERSION}..."
+      curl -L "https://github.com/toml-lang/toml-test/releases/download/v${TOML_TEST_VERSION}/toml-test-v${TOML_TEST_VERSION}-linux-amd64.gz" | gunzip > toml-test
+      chmod +x toml-test
+  script:
+    - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
+    # Verify decoder binary exists
+    - ls -la zig-out/bin/
+    - |
+      echo "Running TOML conformance tests..."
+      echo "Decoder: ./zig-out/bin/toml-test-decoder"
+      echo "toml-test version: $(./toml-test --version 2>&1 || echo 'unknown')"
+    # Run conformance tests
+    # -skip flags for known TOML 1.1 features not yet in toml-test v1.x valid tests
+    - ./toml-test ./zig-out/bin/toml-test-decoder 2>&1 | tee conformance-results.txt
+    # Extract pass/fail summary
+    - |
+      if grep -q "passed" conformance-results.txt; then
+        echo ""
+        echo "=== Conformance Test Summary ==="
+        grep -E "(passed|failed|skipped)" conformance-results.txt | tail -5
+      fi
+  artifacts:
+    paths:
+      - conformance-results.txt
+    expire_in: 1 week
+    when: always
