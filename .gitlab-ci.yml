@@ -102,12 +102,16 @@ toml-test-conformance:
     # Skip tests for TOML 1.1 features that this parser supports:
     # - Newlines in inline tables (TOML 1.1)
     # - Trailing commas in inline tables (TOML 1.1)
-    # - Omitting seconds in local time/datetime (TOML 1.1)
+    # - Omitting seconds in time/datetime (TOML 1.1)
     # - Hex escape sequences \xHH (TOML 1.1)
     - |
       ./toml-test \
-        -skip='invalid/inline-table/linebreak' \
+        -skip='invalid/inline-table/linebreak-1' \
+        -skip='invalid/inline-table/linebreak-2' \
+        -skip='invalid/inline-table/linebreak-3' \
+        -skip='invalid/inline-table/linebreak-4' \
         -skip='invalid/inline-table/trailing-comma' \
+        -skip='invalid/datetime/no-secs' \
         -skip='invalid/local-datetime/no-secs' \
         -skip='invalid/local-time/no-secs' \
         -skip='invalid/string/basic-byte-escapes' \
