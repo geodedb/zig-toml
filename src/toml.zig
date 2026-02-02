@@ -29,6 +29,8 @@ pub const ParseOptions = parser_mod.ParseOptions;
 
 pub const json_tagged = @import("json_tagged.zig");
 
+pub const parallel = @import("parallel.zig");
+
 /// Parse TOML input into a Document.
 ///
 /// The Document owns all parsed data via an internal ArenaAllocator.
