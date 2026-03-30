@@ -47,9 +47,8 @@
 //! | Key Extract        | 8 documents  | Yes              |
 
 const std = @import("std");
-const build_options = @import("toml_build_options");
 
-const spice = if (build_options.enable_spice) @import("spice") else struct {
+const spice = if (true) @import("spice") else struct {
     pub const ThreadPool = void;
     pub const Task = void;
     pub fn Future(comptime I: type, comptime O: type) type {
@@ -63,11 +62,11 @@ const spice = if (build_options.enable_spice) @import("spice") else struct {
 // Global Thread Pool
 // ============================================================================
 
-var global_pool: if (build_options.enable_spice) ?spice.ThreadPool else void = if (build_options.enable_spice) null else {};
+var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
 var pool_mutex: std.Thread.Mutex = .{};
 
-pub fn getPool() if (build_options.enable_spice) *spice.ThreadPool else void {
-    if (!build_options.enable_spice) return;
+pub fn getPool() if (true) *spice.ThreadPool else void {
+    // spice always enabled when this module is compiled
 
     pool_mutex.lock();
     defer pool_mutex.unlock();
@@ -80,7 +79,7 @@ pub fn getPool() if (build_options.enable_spice) *spice.ThreadPool else void {
 }
 
 pub fn deinitPool() void {
-    if (!build_options.enable_spice) return;
+    // spice always enabled when this module is compiled
 
     pool_mutex.lock();
     defer pool_mutex.unlock();
@@ -138,7 +137,7 @@ pub fn parseDocuments(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!build_options.enable_spice or inputs.len < 4) {
+    if (!true or inputs.len < 4) {
         for (inputs, 0..) |input, i| {
             results[i] = parseDocument(allocator, input);
         }
@@ -301,7 +300,7 @@ pub fn validateDocuments(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!build_options.enable_spice or inputs.len < 8) {
+    if (!true or inputs.len < 8) {
         for (inputs, 0..) |input, i| {
             results[i] = validateDocument(input);
         }
@@ -426,7 +425,7 @@ pub fn extractKeys(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!build_options.enable_spice or inputs.len < 8) {
+    if (!true or inputs.len < 8) {
         for (inputs, 0..) |input, i| {
             results[i] = extractKeysFromDocument(allocator, input);
         }
@@ -630,7 +629,7 @@ test "extract keys - empty document" {
 }
 
 test "parallel parse - large batch" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const allocator = std.testing.allocator;
     var inputs: [16][]const u8 = undefined;
@@ -648,7 +647,7 @@ test "parallel parse - large batch" {
 }
 
 test "parallel validate - large batch" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var inputs: [16][]const u8 = undefined;
     for (&inputs) |*input| {
@@ -664,7 +663,7 @@ test "parallel validate - large batch" {
 }
 
 test "parallel extract keys - large batch" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const allocator = std.testing.allocator;
     var inputs: [16][]const u8 = undefined;

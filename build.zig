@@ -10,10 +10,6 @@ pub fn build(b: *std.Build) void {
     // Spice parallelism option
     const enable_spice = b.option(bool, "spice", "Enable spice-based parallelism") orelse true;
 
-    // Build options
-    const build_options = b.addOptions();
-    build_options.addOption(bool, "enable_spice", enable_spice);
-
     // Get spice dependency if enabled
     const spice_mod: ?*std.Build.Module = if (enable_spice) blk: {
         const spice_dep = b.dependency("spice", .{
@@ -29,7 +25,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    toml_mod.addOptions("toml_build_options", build_options);
     if (spice_mod) |sm| toml_mod.addImport("spice", sm);
 
     // Static library
@@ -38,7 +33,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    lib_mod.addOptions("toml_build_options", build_options);
     if (spice_mod) |sm| lib_mod.addImport("spice", sm);
     const lib = b.addLibrary(.{
         .name = "zigtoml",
@@ -67,7 +61,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    unit_test_mod.addOptions("toml_build_options", build_options);
     if (spice_mod) |sm| unit_test_mod.addImport("spice", sm);
     const unit_tests = b.addTest(.{
         .root_module = unit_test_mod,
