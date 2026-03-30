@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    toml_mod.addOptions("build_options", build_options);
+    toml_mod.addOptions("toml_build_options", build_options);
     if (spice_mod) |sm| toml_mod.addImport("spice", sm);
 
     // Static library
@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    lib_mod.addOptions("build_options", build_options);
+    lib_mod.addOptions("toml_build_options", build_options);
     if (spice_mod) |sm| lib_mod.addImport("spice", sm);
     const lib = b.addLibrary(.{
         .name = "zigtoml",
@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    unit_test_mod.addOptions("build_options", build_options);
+    unit_test_mod.addOptions("toml_build_options", build_options);
     if (spice_mod) |sm| unit_test_mod.addImport("spice", sm);
     const unit_tests = b.addTest(.{
         .root_module = unit_test_mod,
