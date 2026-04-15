@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
-//! Parallel TOML operations using spice heartbeat scheduling.
+//! Parallel TOML operations using thread-pool flat task submission.
 //!
 //! Provides high-performance parallel implementations for batch TOML
 //! document parsing and validation.
@@ -9,14 +9,14 @@
 //! ## Overview
 //!
 //! This module enables parallel processing of TOML operations
-//! using the spice thread pool with fork/join work-stealing. Operations
-//! automatically fall back to sequential processing when spice is disabled
-//! or input sizes are below thresholds.
+//! using the thread-pool library with submitBatch/WaitGroup. Operations
+//! automatically fall back to sequential processing when the pool is
+//! unavailable or input sizes are below thresholds.
 //!
 //! ## Build Configuration
 //!
-//! Enable parallel processing with `-Dspice=true` (default: enabled).
-//! Disable with `-Dspice=false` for sequential-only execution.
+//! Enable parallel processing with `-Dthread-pool=true` (default: enabled).
+//! Disable with `-Dthread-pool=false` for sequential-only execution.
 //!
 //! ## Usage Example
 //!
@@ -47,43 +47,28 @@
 //! | Key Extract        | 8 documents  | Yes              |
 
 const std = @import("std");
-
-const spice = if (true) @import("spice") else struct {
-    pub const ThreadPool = void;
-    pub const Task = void;
-    pub fn Future(comptime I: type, comptime O: type) type {
-        _ = I;
-        _ = O;
-        return void;
-    }
-};
+const tp = @import("thread_pool");
 
 // ============================================================================
 // Global Thread Pool
 // ============================================================================
 
-var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
+var global_pool: ?tp.ThreadPool = null;
 var pool_mutex: std.Thread.Mutex = .{};
 
-pub fn getPool() if (true) *spice.ThreadPool else void {
-    // spice always enabled when this module is compiled
-
+pub fn getPool() *tp.ThreadPool {
     pool_mutex.lock();
     defer pool_mutex.unlock();
-
     if (global_pool == null) {
-        global_pool = spice.ThreadPool.init(std.heap.page_allocator);
-        global_pool.?.start(.{});
+        global_pool = tp.ThreadPool.init(std.heap.page_allocator, .{}) catch
+            @panic("thread-pool: init failed");
     }
     return &global_pool.?;
 }
 
 pub fn deinitPool() void {
-    // spice always enabled when this module is compiled
-
     pool_mutex.lock();
     defer pool_mutex.unlock();
-
     if (global_pool) |*pool| {
         pool.deinit();
         global_pool = null;
@@ -108,16 +93,24 @@ pub const ParseResult = struct {
     key_count: usize,
 };
 
-/// Context for parallel parsing
-const ParseContext = struct {
+// ============================================================================
+// Parallel Document Parsing
+// ============================================================================
+
+const MAX_CHUNKS = 64;
+
+const ParseChunk = struct {
     allocator: std.mem.Allocator,
     inputs: []const []const u8,
     results: []ParseResult,
 };
 
-// ============================================================================
-// Parallel Document Parsing
-// ============================================================================
+fn parseChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *ParseChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.inputs, 0..) |input, i| {
+        chunk.results[i] = parseDocument(chunk.allocator, input);
+    }
+}
 
 /// Parse multiple TOML documents in parallel.
 ///
@@ -137,7 +130,7 @@ pub fn parseDocuments(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!true or inputs.len < 4) {
+    if (inputs.len < 4) {
         for (inputs, 0..) |input, i| {
             results[i] = parseDocument(allocator, input);
         }
@@ -145,44 +138,28 @@ pub fn parseDocuments(
     }
 
     const pool = getPool();
-    const ctx = ParseContext{
-        .allocator = allocator,
-        .inputs = inputs,
-        .results = results,
-    };
-    _ = pool.call(void, parseTask, ctx);
-}
-
-fn parseTask(t: *spice.Task, ctx: ParseContext) void {
-    const inputs = ctx.inputs;
-    const results = ctx.results;
-
-    if (inputs.len < 2) {
-        for (inputs, 0..) |input, i| {
-            results[i] = parseDocument(ctx.allocator, input);
-        }
+    const chunk_size = @max(1, inputs.len / MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]ParseChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len and n < MAX_CHUNKS) {
+        const end = @min(i + chunk_size, inputs.len);
+        chunks[n] = .{
+            .allocator = allocator,
+            .inputs = inputs[i..end],
+            .results = results[i..end],
+        };
+        batch[n] = .{ .task_fn = &parseChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        n += 1;
+        i = end;
+    }
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        for (inputs, 0..) |input, j| results[j] = parseDocument(allocator, input);
         return;
-    }
-
-    const mid = inputs.len / 2;
-    const left_ctx = ParseContext{
-        .allocator = ctx.allocator,
-        .inputs = inputs[0..mid],
-        .results = results[0..mid],
     };
-    const right_ctx = ParseContext{
-        .allocator = ctx.allocator,
-        .inputs = inputs[mid..],
-        .results = results[mid..],
-    };
-
-    var fut = spice.Future(ParseContext, void).init();
-    fut.fork(t, parseTask, right_ctx);
-
-    t.call(void, parseTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parseTask, right_ctx);
-    }
+    wg.wait();
 }
 
 fn parseDocument(allocator: std.mem.Allocator, input: []const u8) ParseResult {
@@ -275,15 +252,21 @@ pub const ValidateResult = struct {
     error_msg: ?[]const u8,
 };
 
-/// Context for parallel validation
-const ValidateContext = struct {
+// ============================================================================
+// Parallel Document Validation
+// ============================================================================
+
+const ValidateChunk = struct {
     inputs: []const []const u8,
     results: []ValidateResult,
 };
 
-// ============================================================================
-// Parallel Document Validation
-// ============================================================================
+fn validateChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *ValidateChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.inputs, 0..) |input, i| {
+        chunk.results[i] = validateDocument(input);
+    }
+}
 
 /// Validate multiple TOML documents in parallel.
 ///
@@ -300,7 +283,7 @@ pub fn validateDocuments(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!true or inputs.len < 8) {
+    if (inputs.len < 8) {
         for (inputs, 0..) |input, i| {
             results[i] = validateDocument(input);
         }
@@ -308,41 +291,24 @@ pub fn validateDocuments(
     }
 
     const pool = getPool();
-    const ctx = ValidateContext{
-        .inputs = inputs,
-        .results = results,
-    };
-    _ = pool.call(void, validateTask, ctx);
-}
-
-fn validateTask(t: *spice.Task, ctx: ValidateContext) void {
-    const inputs = ctx.inputs;
-    const results = ctx.results;
-
-    if (inputs.len < 4) {
-        for (inputs, 0..) |input, i| {
-            results[i] = validateDocument(input);
-        }
+    const chunk_size = @max(1, inputs.len / MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]ValidateChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len and n < MAX_CHUNKS) {
+        const end = @min(i + chunk_size, inputs.len);
+        chunks[n] = .{ .inputs = inputs[i..end], .results = results[i..end] };
+        batch[n] = .{ .task_fn = &validateChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        n += 1;
+        i = end;
+    }
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        for (inputs, 0..) |input, j| results[j] = validateDocument(input);
         return;
-    }
-
-    const mid = inputs.len / 2;
-    const left_ctx = ValidateContext{
-        .inputs = inputs[0..mid],
-        .results = results[0..mid],
     };
-    const right_ctx = ValidateContext{
-        .inputs = inputs[mid..],
-        .results = results[mid..],
-    };
-
-    var fut = spice.Future(ValidateContext, void).init();
-    fut.fork(t, validateTask, right_ctx);
-
-    t.call(void, validateTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, validateTask, right_ctx);
-    }
+    wg.wait();
 }
 
 fn validateDocument(input: []const u8) ValidateResult {
@@ -399,16 +365,22 @@ pub const KeyExtractResult = struct {
     success: bool,
 };
 
-/// Context for parallel key extraction
-const KeyExtractContext = struct {
+// ============================================================================
+// Parallel Key Extraction
+// ============================================================================
+
+const KeyExtractChunk = struct {
     allocator: std.mem.Allocator,
     inputs: []const []const u8,
     results: []KeyExtractResult,
 };
 
-// ============================================================================
-// Parallel Key Extraction
-// ============================================================================
+fn keyExtractChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *KeyExtractChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.inputs, 0..) |input, i| {
+        chunk.results[i] = extractKeysFromDocument(chunk.allocator, input);
+    }
+}
 
 /// Extract top-level keys from multiple TOML documents in parallel.
 ///
@@ -425,7 +397,7 @@ pub fn extractKeys(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!true or inputs.len < 8) {
+    if (inputs.len < 8) {
         for (inputs, 0..) |input, i| {
             results[i] = extractKeysFromDocument(allocator, input);
         }
@@ -433,44 +405,28 @@ pub fn extractKeys(
     }
 
     const pool = getPool();
-    const ctx = KeyExtractContext{
-        .allocator = allocator,
-        .inputs = inputs,
-        .results = results,
-    };
-    _ = pool.call(void, keyExtractTask, ctx);
-}
-
-fn keyExtractTask(t: *spice.Task, ctx: KeyExtractContext) void {
-    const inputs = ctx.inputs;
-    const results = ctx.results;
-
-    if (inputs.len < 4) {
-        for (inputs, 0..) |input, i| {
-            results[i] = extractKeysFromDocument(ctx.allocator, input);
-        }
+    const chunk_size = @max(1, inputs.len / MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]KeyExtractChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len and n < MAX_CHUNKS) {
+        const end = @min(i + chunk_size, inputs.len);
+        chunks[n] = .{
+            .allocator = allocator,
+            .inputs = inputs[i..end],
+            .results = results[i..end],
+        };
+        batch[n] = .{ .task_fn = &keyExtractChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        n += 1;
+        i = end;
+    }
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        for (inputs, 0..) |input, j| results[j] = extractKeysFromDocument(allocator, input);
         return;
-    }
-
-    const mid = inputs.len / 2;
-    const left_ctx = KeyExtractContext{
-        .allocator = ctx.allocator,
-        .inputs = inputs[0..mid],
-        .results = results[0..mid],
     };
-    const right_ctx = KeyExtractContext{
-        .allocator = ctx.allocator,
-        .inputs = inputs[mid..],
-        .results = results[mid..],
-    };
-
-    var fut = spice.Future(KeyExtractContext, void).init();
-    fut.fork(t, keyExtractTask, right_ctx);
-
-    t.call(void, keyExtractTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, keyExtractTask, right_ctx);
-    }
+    wg.wait();
 }
 
 fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyExtractResult {
@@ -629,8 +585,6 @@ test "extract keys - empty document" {
 }
 
 test "parallel parse - large batch" {
-    // spice always enabled when this module is compiled
-
     const allocator = std.testing.allocator;
     var inputs: [16][]const u8 = undefined;
     for (&inputs) |*input| {
@@ -647,8 +601,6 @@ test "parallel parse - large batch" {
 }
 
 test "parallel validate - large batch" {
-    // spice always enabled when this module is compiled
-
     var inputs: [16][]const u8 = undefined;
     for (&inputs) |*input| {
         input.* = "[table]\nkey = \"value\"";
@@ -663,8 +615,6 @@ test "parallel validate - large batch" {
 }
 
 test "parallel extract keys - large batch" {
-    // spice always enabled when this module is compiled
-
     const allocator = std.testing.allocator;
     var inputs: [16][]const u8 = undefined;
     for (&inputs) |*input| {

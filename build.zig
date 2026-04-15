@@ -7,16 +7,16 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Spice parallelism option
-    const enable_spice = b.option(bool, "spice", "Enable spice-based parallelism") orelse true;
+    // thread-pool parallelism option
+    const enable_tp = b.option(bool, "thread-pool", "Enable thread-pool-based parallelism") orelse true;
 
-    // Get spice dependency if enabled
-    const spice_mod: ?*std.Build.Module = if (enable_spice) blk: {
-        const spice_dep = b.dependency("spice", .{
+    // Get thread-pool dependency if enabled
+    const tp_mod: ?*std.Build.Module = if (enable_tp) blk: {
+        const tp_dep = b.dependency("thread_pool", .{
             .target = target,
             .optimize = optimize,
         });
-        break :blk spice_dep.module("spice");
+        break :blk tp_dep.module("thread_pool");
     } else null;
 
     // Library module (for use as dependency)
@@ -25,7 +25,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    if (spice_mod) |sm| toml_mod.addImport("spice", sm);
+    if (tp_mod) |tm| toml_mod.addImport("thread_pool", tm);
 
     // Static library
     const lib_mod = b.createModule(.{
@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    if (spice_mod) |sm| lib_mod.addImport("spice", sm);
+    if (tp_mod) |tm| lib_mod.addImport("thread_pool", tm);
     const lib = b.addLibrary(.{
         .name = "zigtoml",
         .linkage = .static,
@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    if (spice_mod) |sm| unit_test_mod.addImport("spice", sm);
+    if (tp_mod) |tm| unit_test_mod.addImport("thread_pool", tm);
     const unit_tests = b.addTest(.{
         .root_module = unit_test_mod,
     });
