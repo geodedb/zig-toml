@@ -303,3 +303,21 @@ test "special floats" {
     try std.testing.expect(std.math.isNegativeInf(b.float));
     try std.testing.expect(std.math.isNan(c.float));
 }
+
+test "parallel re-export is reachable" {
+    // Smoke test: verify parallel.zig is reachable through the public
+    // toml root module and the batch parse entry point works end-to-end.
+    const inputs = [_][]const u8{
+        "a = 1\n",
+        "b = 2\n",
+        "c = 3\n",
+        "d = 4\n",
+    };
+    var results: [4]parallel.ParseResult = undefined;
+    parallel.parseDocuments(std.testing.allocator, &inputs, &results);
+    defer parallel.deinitPool();
+
+    for (results) |r| {
+        try std.testing.expect(r.success);
+    }
+}

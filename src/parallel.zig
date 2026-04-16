@@ -54,7 +54,7 @@ const tp = @import("thread_pool");
 // ============================================================================
 
 var global_pool: ?tp.ThreadPool = null;
-var pool_mutex: std.Thread.Mutex = .{};
+var pool_mutex: tp.sync.Mutex = .{};
 
 pub fn getPool() *tp.ThreadPool {
     pool_mutex.lock();
@@ -430,7 +430,8 @@ pub fn extractKeys(
 }
 
 fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyExtractResult {
-    var keys = std.ArrayList(u8).init(allocator);
+    var keys: std.ArrayList(u8) = .empty;
+    defer keys.deinit(allocator);
     var count: usize = 0;
     var line_start: usize = 0;
 
@@ -450,11 +451,11 @@ fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyE
                     const key = std.mem.trim(u8, line[0..eq_pos], " \t");
                     if (key.len > 0) {
                         if (count > 0) {
-                            keys.append(',') catch {
+                            keys.append(allocator, ',') catch {
                                 return .{ .keys = null, .count = 0, .success = false };
                             };
                         }
-                        keys.appendSlice(key) catch {
+                        keys.appendSlice(allocator, key) catch {
                             return .{ .keys = null, .count = 0, .success = false };
                         };
                         count += 1;
@@ -466,12 +467,11 @@ fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyE
     }
 
     if (keys.items.len == 0) {
-        keys.deinit();
         return .{ .keys = null, .count = 0, .success = true };
     }
 
     return .{
-        .keys = keys.toOwnedSlice() catch null,
+        .keys = keys.toOwnedSlice(allocator) catch null,
         .count = count,
         .success = true,
     };
