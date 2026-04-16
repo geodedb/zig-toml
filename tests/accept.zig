@@ -13,13 +13,13 @@ test "tagged JSON minimal" {
     var doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
 
-    try toml.writeTaggedJson(&doc, output.writer(std.testing.allocator));
+    try toml.writeTaggedJson(&doc, &aw.writer);
 
     const expected = "{\"a\":{\"type\":\"integer\",\"value\":\"42\"}}\n";
-    try std.testing.expectEqualStrings(expected, output.items);
+    try std.testing.expectEqualStrings(expected, aw.written());
 }
 
 // Test 2: Duplicate key
@@ -54,14 +54,14 @@ test "v1.1 inline table allows trailing comma and newlines" {
     var doc = try toml.parse(std.testing.allocator, input, .{ .version = .v1_1_0 });
     defer doc.deinit();
 
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
 
-    try toml.writeTaggedJson(&doc, output.writer(std.testing.allocator));
+    try toml.writeTaggedJson(&doc, &aw.writer);
 
     // Keys must be sorted: a then b
     const expected = "{\"t\":{\"a\":{\"type\":\"integer\",\"value\":\"1\"},\"b\":{\"type\":\"integer\",\"value\":\"2\"}}}\n";
-    try std.testing.expectEqualStrings(expected, output.items);
+    try std.testing.expectEqualStrings(expected, aw.written());
 }
 
 // Test 4: v1.0 inline table rejects newlines/trailing comma
@@ -96,13 +96,13 @@ test "v1.1 local time seconds omission" {
     var doc = try toml.parse(std.testing.allocator, input, .{ .version = .v1_1_0 });
     defer doc.deinit();
 
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
 
-    try toml.writeTaggedJson(&doc, output.writer(std.testing.allocator));
+    try toml.writeTaggedJson(&doc, &aw.writer);
 
     const expected = "{\"lt\":{\"type\":\"time-local\",\"value\":\"07:32:00\"}}\n";
-    try std.testing.expectEqualStrings(expected, output.items);
+    try std.testing.expectEqualStrings(expected, aw.written());
 }
 
 // Test 6: v1.0 rejects local time seconds omission

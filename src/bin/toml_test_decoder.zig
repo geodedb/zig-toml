@@ -10,24 +10,28 @@
 const std = @import("std");
 const toml = @import("toml");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Setup buffered I/O
-    const stdin = std.fs.File.stdin();
-    const stdout = std.fs.File.stdout();
-    const stderr = std.fs.File.stderr();
+    const io = init.io;
 
+    // Setup buffered I/O
+    const stdin = std.Io.File.stdin();
+    const stdout = std.Io.File.stdout();
+    const stderr = std.Io.File.stderr();
+
+    var stdin_buf: [4096]u8 = undefined;
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
 
-    var stdout_writer = stdout.writer(&stdout_buf);
-    var stderr_writer = stderr.writer(&stderr_buf);
+    var stdin_reader = stdin.readerStreaming(io, &stdin_buf);
+    var stdout_writer = stdout.writerStreaming(io, &stdout_buf);
+    var stderr_writer = stderr.writerStreaming(io, &stderr_buf);
 
-    // Read all of stdin
-    const input = stdin.readToEndAlloc(allocator, 16 * 1024 * 1024) catch |e| {
+    // Read all of stdin (16 MiB cap).
+    const input = stdin_reader.interface.allocRemaining(allocator, .limited(16 * 1024 * 1024)) catch |e| {
         stderr_writer.interface.print("error: failed to read stdin: {}\n", .{e}) catch {};
         stderr_writer.interface.flush() catch {};
         std.process.exit(1);
