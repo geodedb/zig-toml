@@ -104,6 +104,8 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
+        // S-9: charge the root table creation against max_values.
+        try self.bumpValues();
         const doc = try val.createDocument(self.alloc);
         errdefer doc.deinit();
 
@@ -215,6 +217,7 @@ pub const Parser = struct {
                             return error.ParseFailed;
                         }
                         // Create new table and append to array
+                        try self.bumpValues();
                         const new_table = try val.createTable(alloc);
                         new_table.table.defined_explicitly = true;
                         try val.arrayAppend(alloc, existing, new_table);
@@ -271,8 +274,10 @@ pub const Parser = struct {
                 // Key doesn't exist - create it
                 if (is_last and is_array_of_tables) {
                     // Create array of tables
+                    try self.bumpValues();
                     const arr = try val.createArray(alloc);
                     arr.array.is_static = false;
+                    try self.bumpValues();
                     const new_table = try val.createTable(alloc);
                     new_table.table.defined_explicitly = true;
                     new_table.table.is_array_of_tables = true;
@@ -281,6 +286,7 @@ pub const Parser = struct {
                     return new_table;
                 } else {
                     // Create implicit table
+                    try self.bumpValues();
                     const new_table = try val.createTable(alloc);
                     if (is_last) {
                         new_table.table.defined_explicitly = true;
@@ -342,6 +348,7 @@ pub const Parser = struct {
                 }
                 target = existing;
             } else {
+                try self.bumpValues();
                 const new_table = try val.createTable(alloc);
                 new_table.table.defined_by_dotted_key = true;
                 try val.tableSet(alloc, target, key, new_table);
@@ -446,6 +453,7 @@ pub const Parser = struct {
         try self.enterDepth();
         defer self.exitDepth();
 
+        try self.bumpValues();
         const result = try alloc.create(Value);
 
         switch (self.current.tag) {
@@ -585,6 +593,7 @@ pub const Parser = struct {
         var outer_items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
 
         // Parse the inner array (we're already "inside" it after consuming [[)
+        try self.bumpValues();
         const inner_array = try alloc.create(Value);
         inner_array.* = try self.parseArrayContents(alloc);
         try outer_items.append(alloc, inner_array);
@@ -728,12 +737,14 @@ pub const Parser = struct {
             if (path.items.len > 1) {
                 // Create nested tables starting from the second key
                 // For "a.b = 1", path is ["a", "b"], we want a -> {b -> 1}
+                try self.bumpValues();
                 var current_table = try val.createTable(alloc);
                 current_table.table.is_inline = true;
                 var target = current_table;
 
                 // Start from index 1, not 0 - the first key becomes the root key
                 for (path.items[1 .. path.items.len - 1]) |key| {
+                    try self.bumpValues();
                     const nested = try val.createTable(alloc);
                     nested.table.is_inline = true;
                     try val.tableSet(alloc, target, key, nested);

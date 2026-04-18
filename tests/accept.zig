@@ -470,3 +470,41 @@ test "S-9 max_keys cap returns ResourceLimitExceeded" {
         },
     }
 }
+
+// S-9: max_values cap catches allocation blow-ups even when key count
+// is low (single key, huge array literal).
+test "S-9 max_values cap returns ResourceLimitExceeded" {
+    const allocator = std.testing.allocator;
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try buf.appendSlice(allocator, "arr = [");
+    var i: usize = 0;
+    var num_buf: [32]u8 = undefined;
+    while (i < 2000) : (i += 1) {
+        if (i > 0) try buf.append(allocator, ',');
+        const s = try std.fmt.bufPrint(&num_buf, "{d}", .{i});
+        try buf.appendSlice(allocator, s);
+    }
+    try buf.appendSlice(allocator, "]\n");
+
+    const opts = toml.ParseOptions{
+        .max_keys = 10_000,
+        .max_values = 100,
+        .max_bytes = 16 * 1024 * 1024,
+    };
+
+    const result = toml.parseWithError(allocator, buf.items, opts);
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| {
+            try std.testing.expectEqual(
+                toml.ErrorCode.ResourceLimitExceeded,
+                e.code,
+            );
+        },
+    }
+}
