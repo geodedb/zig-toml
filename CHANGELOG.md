@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CI: `conformance-decoder` GitLab job runs the pinned BurntSushi/toml-test
+  corpus against `zig-out/bin/toml-test-decoder` and uploads the full log
+  as an artifact (closes GAP-0004).
+- Tests: `tests/differential.zig` walks a vendored 30-case toml-test
+  subset under `tests/testdata/toml-test/` and asserts valid inputs
+  produce the expected tagged JSON and invalid inputs are rejected
+  (closes Q-13).
+
+### Changed
+
+- Tests: the two "U-R malformed" smoke tests in `src/toml.zig` and two new
+  smoke tests now assert `error_info` carries line, column, message, and
+  byte_index on failure, instead of only checking `.success == true`
+  (closes Q-3).
+
 ## [0.1.1] - 2026-01-26
 
 ### Changed
