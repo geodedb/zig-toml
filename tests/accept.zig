@@ -391,3 +391,54 @@ test "escape sequences" {
     const str = doc.root.get("str") orelse unreachable;
     try std.testing.expectEqualStrings("backslash: \\ quote: \" tab: \t newline: \n", str.string);
 }
+
+// U-U: Tagged-JSON keys must stay sorted at every level even when a
+// table has >256 entries. Previously the emitter fell through to the
+// parser's insertion order for large tables, breaking determinism
+// (toml-test golden-file comparisons and CI diff noise).
+test "tagged JSON sorts 300 keys deterministically" {
+    const allocator = std.testing.allocator;
+    const N: usize = 300;
+
+    // Build input in shuffled-looking order by using an odd stride that
+    // visits every key exactly once and does NOT produce lexicographic
+    // order. The sorted output must still emit k000, k001, …, k299.
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(allocator);
+
+    const stride: usize = 97; // coprime with 300
+    var visited: usize = 0;
+    var cursor: usize = 0;
+    var scratch: [64]u8 = undefined;
+    while (visited < N) : (visited += 1) {
+        const line = try std.fmt.bufPrint(&scratch, "k{d:0>3} = {d}\n", .{ cursor, cursor });
+        try input.appendSlice(allocator, line);
+        cursor = (cursor + stride) % N;
+    }
+
+    var doc = try toml.parse(allocator, input.items, .{});
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    try toml.writeTaggedJson(&doc, &aw.writer);
+    const out = aw.written();
+
+    // Scan key positions in the emitted JSON and assert they are sorted.
+    // Each key appears as the literal `"kNNN"` exactly once.
+    var prev_pos: ?usize = null;
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        var key_buf: [8]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "\"k{d:0>3}\"", .{i});
+        const found = std.mem.indexOf(u8, out, key) orelse {
+            std.debug.print("missing key {s} in output\n", .{key});
+            try std.testing.expect(false);
+            return;
+        };
+        if (prev_pos) |p| {
+            try std.testing.expect(found > p); // strictly increasing
+        }
+        prev_pos = found;
+    }
+}

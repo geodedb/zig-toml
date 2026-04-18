@@ -17,29 +17,38 @@ pub fn writeTaggedJson(doc: *const Document, writer: anytype) !void {
     try writer.writeByte('\n');
 }
 
+fn tableEntryLessThan(_: void, a: TableEntry, b: TableEntry) bool {
+    return std.mem.order(u8, a.key, b.key) == .lt;
+}
+
 fn writeValue(v: *const Value, writer: anytype) !void {
     switch (v.*) {
         .table => |t| {
             try writer.writeByte('{');
-            // Sort entries by key (inline to avoid returning stack memory)
-            var sorted: [256]TableEntry = undefined;
-            const entries_to_write = if (t.entries.len <= sorted.len) blk: {
-                @memcpy(sorted[0..t.entries.len], t.entries);
-                var sorted_slice = sorted[0..t.entries.len];
-                // Insertion sort by key
-                var ii: usize = 1;
-                while (ii < sorted_slice.len) : (ii += 1) {
-                    const key_entry = sorted_slice[ii];
-                    var jj = ii;
-                    while (jj > 0 and std.mem.order(u8, sorted_slice[jj - 1].key, key_entry.key) == .gt) {
-                        sorted_slice[jj] = sorted_slice[jj - 1];
-                        jj -= 1;
-                    }
-                    sorted_slice[jj] = key_entry;
-                }
-                break :blk sorted_slice;
-            } else t.entries;
-            for (entries_to_write, 0..) |entry, i| {
+            // Always sort keys so the emitter output is deterministic
+            // regardless of input-order choices the parser makes. For
+            // small tables we copy onto a stack buffer; for larger ones we
+            // allocate scratch from the SMP allocator. Previously tables
+            // with >256 entries fell through to the parser's insertion
+            // order, violating the documented "sorted at every level"
+            // contract (toml-test comparison failures under adversarial
+            // inputs; non-reproducible diffs).
+            var stack_sorted: [256]TableEntry = undefined;
+            var heap_sorted: ?[]TableEntry = null;
+            defer if (heap_sorted) |slice| std.heap.smp_allocator.free(slice);
+
+            const sorted_slice: []TableEntry = if (t.entries.len <= stack_sorted.len) blk: {
+                @memcpy(stack_sorted[0..t.entries.len], t.entries);
+                break :blk stack_sorted[0..t.entries.len];
+            } else blk: {
+                const buf = try std.heap.smp_allocator.alloc(TableEntry, t.entries.len);
+                @memcpy(buf, t.entries);
+                heap_sorted = buf;
+                break :blk buf;
+            };
+            std.sort.pdq(TableEntry, sorted_slice, {}, tableEntryLessThan);
+
+            for (sorted_slice, 0..) |entry, i| {
                 if (i > 0) try writer.writeByte(',');
                 try writeJsonString(entry.key, writer);
                 try writer.writeByte(':');
