@@ -25,6 +25,10 @@ include:
 
 variables:
   ZIG_VERSION: "0.16.0"
+  # Pinned tag of github.com/toml-lang/toml-test. Bump deliberately; do
+  # not use @latest -- upstream corpus changes would turn CI red without
+  # a local commit. See docs/superpowers/plans/2026-04-18-13-toml-test-ci-differential.md.
+  TOML_TEST_VERSION: "v1.5.0"
   # Coverage floor.
   # Bumped deliberately as tests are added. The floor sits two below
   # the live step count so normal flake does not mask a real drop.
@@ -205,6 +209,44 @@ test-release-small:
     paths:
       - test-release-small.log
     expire_in: 1 week
+  needs:
+    - build
+
+# toml-test conformance stage (closes GAP-0004).
+#
+# Builds the zig-out/bin/toml-test-decoder binary, then runs the pinned
+# BurntSushi/toml-test Go harness (github.com/toml-lang/toml-test) against
+# the upstream valid+invalid corpus.
+#
+# allow_failure is `true` initially so we establish a baseline without
+# blocking merges; once the pass rate stabilises (>= 95%) this flips
+# to `false`. See docs/superpowers/plans/2026-04-18-13-toml-test-ci-differential.md.
+conformance-decoder:
+  stage: test
+  image: golang:1.22-bookworm
+  before_script:
+    - *install-zig
+    - go install github.com/toml-lang/toml-test/cmd/toml-test@${TOML_TEST_VERSION}
+    - export PATH="$(go env GOPATH)/bin:$PATH"
+    - toml-test -help 2>&1 | head -n 1
+  script:
+    - zig build --release=safe
+    - test -x zig-out/bin/toml-test-decoder
+    - set -o pipefail
+    - toml-test ./zig-out/bin/toml-test-decoder 2>&1 | tee conformance.log
+    - |
+      # Extract the final pass/fail summary line emitted by toml-test.
+      # Format: "toml-test [./toml-test-decoder]: using embedded tests: N passed, M failed"
+      if ! grep -qE "passed,[[:space:]]+[0-9]+[[:space:]]+failed" conformance.log; then
+        echo "CONFORMANCE GATE: no summary line -- runner aborted early." >&2
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths:
+      - conformance.log
+    expire_in: 1 month
+  allow_failure: true
   needs:
     - build
 

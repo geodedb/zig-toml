@@ -80,6 +80,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_accept_tests = b.addRunArtifact(accept_tests);
 
+    // Differential tests -- walks tests/testdata/toml-test/ corpus.
+    const differential_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/differential.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    const run_differential_tests = b.addRunArtifact(differential_tests);
+
     // Documentation hygiene tests -- guard against drift between source
     // files and ARCHITECTURE.md / CHANGELOG.md / PUBLIC_API.md. See
     // tests/docs_hygiene_test.zig for the full rationale.
@@ -112,6 +125,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
+    test_step.dependOn(&run_differential_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
     test_step.dependOn(&run_docs_hygiene.step);
 

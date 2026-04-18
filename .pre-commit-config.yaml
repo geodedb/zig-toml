@@ -32,6 +32,7 @@ repos:
   - id: check-json
     exclude: ^(vendor/|dist/|zig-out/)
   - id: check-toml
+    exclude: ^tests/testdata/toml-test/invalid/
 
       # Security
   - id: detect-private-key
