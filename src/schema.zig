@@ -456,6 +456,142 @@ pub const Schema = struct {
     }
 };
 
+// --------------------------------------------------------------------
+// Style B: comptime-typed decode()
+// --------------------------------------------------------------------
+
+pub const DecodeError = error{
+    TypeMismatch,
+    MissingField,
+    IntegerOverflow,
+    UnsupportedType,
+    OutOfMemory,
+};
+
+/// Owning wrapper returned by `decode`. Holds an ArenaAllocator that owns
+/// every slice/string copied out of the `Document`. The caller's
+/// Document can be freed independently.
+pub fn Decoded(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        value: T,
+        arena: std.heap.ArenaAllocator,
+
+        pub fn deinit(self: *Self) void {
+            self.arena.deinit();
+        }
+    };
+}
+
+/// Decode a TOML `Document` into a user-defined Zig type `T`. `T` must be
+/// a struct composed of: `[]const u8`, integer, float, bool, optional
+/// versions of the above, nested structs, or slices of the above.
+pub fn decode(
+    comptime T: type,
+    alloc: Allocator,
+    document: *const Document,
+) DecodeError!Decoded(T) {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const value = try decodeValue(T, arena_alloc, document.root);
+    return .{ .value = value, .arena = arena };
+}
+
+fn decodeValue(
+    comptime T: type,
+    alloc: Allocator,
+    value: *const Value,
+) DecodeError!T {
+    const info = @typeInfo(T);
+    switch (info) {
+        .@"struct" => return try decodeStruct(T, alloc, value),
+        .int => return try decodeInt(T, value),
+        .float => {
+            if (value.* != .float and value.* != .integer) return DecodeError.TypeMismatch;
+            const f: f64 = if (value.* == .float) value.float else @floatFromInt(value.integer);
+            return @as(T, @floatCast(f));
+        },
+        .bool => {
+            if (value.* != .bool) return DecodeError.TypeMismatch;
+            return value.bool;
+        },
+        .pointer => |p| {
+            if (p.size == .slice and p.child == u8 and p.is_const) {
+                if (value.* != .string) return DecodeError.TypeMismatch;
+                return try alloc.dupe(u8, value.string);
+            }
+            if (p.size == .slice) {
+                if (value.* != .array) return DecodeError.TypeMismatch;
+                const items = value.array.items.items;
+                const out = try alloc.alloc(p.child, items.len);
+                for (items, 0..) |*el, i| {
+                    out[i] = try decodeValue(p.child, alloc, el);
+                }
+                return out;
+            }
+            return DecodeError.UnsupportedType;
+        },
+        .optional => |o| {
+            // The caller of decodeStruct handles presence/absence; this branch
+            // decodes a present non-null optional.
+            return @as(T, try decodeValue(o.child, alloc, value));
+        },
+        else => return DecodeError.UnsupportedType,
+    }
+}
+
+fn decodeInt(
+    comptime T: type,
+    value: *const Value,
+) DecodeError!T {
+    if (value.* != .integer) return DecodeError.TypeMismatch;
+    const n = value.integer;
+    const max_t: i128 = std.math.maxInt(T);
+    const min_t: i128 = std.math.minInt(T);
+    const widened: i128 = n;
+    if (widened < min_t or widened > max_t) return DecodeError.IntegerOverflow;
+    return @intCast(n);
+}
+
+fn decodeStruct(
+    comptime T: type,
+    alloc: Allocator,
+    value: *const Value,
+) DecodeError!T {
+    if (value.* != .table) return DecodeError.TypeMismatch;
+    var out: T = undefined;
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        @field(out, field.name) = try decodeField(field, alloc, value);
+    }
+    return out;
+}
+
+fn decodeField(
+    comptime field: std.builtin.Type.StructField,
+    alloc: Allocator,
+    value: *const Value,
+) DecodeError!field.type {
+    const fi = @typeInfo(field.type);
+    const child = value.get(field.name);
+    if (child) |c| {
+        if (fi == .optional) {
+            return @as(field.type, try decodeValue(fi.optional.child, alloc, c));
+        }
+        return try decodeValue(field.type, alloc, c);
+    }
+    // Absent child: optional → null, default → default, else MissingField.
+    if (fi == .optional) {
+        return @as(field.type, null);
+    }
+    if (field.default_value_ptr) |dv_ptr| {
+        const dv: *const field.type = @ptrCast(@alignCast(dv_ptr));
+        return dv.*;
+    }
+    return DecodeError.MissingField;
+}
+
 test "schema module compiles" {
     // Placeholder to ensure the module is reachable from the unit-test build.
     try std.testing.expect(true);
@@ -852,4 +988,212 @@ test "Schema.validate succeeds when no diags" {
     var diags = DiagnosticList.init(alloc);
     defer diags.deinit();
     try schema_root.validate(doc.root, &diags);
+}
+
+test "decode: flat struct with string and u16" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\name = "svc"
+        \\port = 8080
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        name: []const u8,
+        port: u16,
+    };
+
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings("svc", decoded.value.name);
+    try std.testing.expectEqual(@as(u16, 8080), decoded.value.port);
+}
+
+test "decode: nested struct" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\[server]
+        \\host = "localhost"
+        \\port = 8080
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Server = struct {
+        host: []const u8,
+        port: u16,
+    };
+    const Config = struct {
+        server: Server,
+    };
+
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings("localhost", decoded.value.server.host);
+    try std.testing.expectEqual(@as(u16, 8080), decoded.value.server.port);
+}
+
+test "decode: slice of strings" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "tags = [\"a\", \"b\", \"c\"]\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        tags: [][]const u8,
+    };
+
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expectEqual(@as(usize, 3), decoded.value.tags.len);
+    try std.testing.expectEqualStrings("a", decoded.value.tags[0]);
+    try std.testing.expectEqualStrings("b", decoded.value.tags[1]);
+    try std.testing.expectEqualStrings("c", decoded.value.tags[2]);
+}
+
+test "decode: optional absent field becomes null" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "name = \"svc\"\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        name: []const u8,
+        port: ?u16,
+    };
+
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings("svc", decoded.value.name);
+    try std.testing.expect(decoded.value.port == null);
+}
+
+test "decode: optional present field is decoded" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\name = "svc"
+        \\port = 443
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        name: []const u8,
+        port: ?u16,
+    };
+
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expect(decoded.value.port != null);
+    try std.testing.expectEqual(@as(u16, 443), decoded.value.port.?);
+}
+
+test "decode: struct field with default used when absent" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "name = \"svc\"\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        name: []const u8,
+        port: u16 = 8080,
+    };
+
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expectEqual(@as(u16, 8080), decoded.value.port);
+}
+
+test "decode: float from integer value" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "ratio = 3.14\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        ratio: f64,
+    };
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expectApproxEqRel(@as(f64, 3.14), decoded.value.ratio, 0.0001);
+}
+
+test "decode error: missing required field" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "name = \"svc\"\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        name: []const u8,
+        port: u16,
+    };
+
+    try std.testing.expectError(DecodeError.MissingField, decode(Config, alloc, doc));
+}
+
+test "decode error: type mismatch" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\name = "svc"
+        \\port = "eighty"
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        name: []const u8,
+        port: u16,
+    };
+
+    try std.testing.expectError(DecodeError.TypeMismatch, decode(Config, alloc, doc));
+}
+
+test "decode error: integer overflow into u8" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "n = 256\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        n: u8,
+    };
+
+    try std.testing.expectError(DecodeError.IntegerOverflow, decode(Config, alloc, doc));
+}
+
+test "decode error: negative into unsigned" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "n = -1\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        n: u16,
+    };
+
+    try std.testing.expectError(DecodeError.IntegerOverflow, decode(Config, alloc, doc));
 }
