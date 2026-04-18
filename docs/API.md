@@ -541,35 +541,27 @@ passes over a directory tree). It is NOT a parallel drop-in for
 
 ### What it does today (honest scope)
 
-`parallel.parseDocuments(allocator, inputs, results)` runs a lightweight
-byte-level shape checker across `inputs` in parallel chunks using the
-`thread_pool` dependency. Each input produces a `ParseResult` with:
+`parallel.parseDocuments` invokes the real TOML parser for every input,
+so the accept/reject decision and the emitted `Document` are
+bit-identical to `toml.parse`. Batching runs on the thread pool above a
+4-document threshold; below that, it falls back to sequential
+execution. Each successful result carries the parsed `Document`; the
+caller must `deinit` any non-null `doc`.
 
-- `success: bool` -- true iff the shape-checker saw no obvious error.
-- `error_code: u8` -- non-zero on shape errors (e.g. unterminated string).
-- `error_line`, `error_column` -- 1-based diagnostic position on error.
-- `key_count: usize` -- approximate top-level key count.
+Each input produces a `ParseResult` with the following fields:
 
-`parallel.validateDocuments(inputs, results)` runs a UTF-8 + bracket +
-control-byte validator (also in parallel).
+| Field          | Type        | Description                                                                         |
+|----------------|-------------|-------------------------------------------------------------------------------------|
+| `success`      | `bool`      | True iff the parser accepted the input.                                             |
+| `error_code`   | `u8`        | Non-zero on failure; mapped from `toml.ErrorCode` ordinals.                         |
+| `error_line`   | `?usize`    | 1-based line of the first parse error (null on success).                            |
+| `error_column` | `?usize`    | 1-based column of the first parse error (null on success).                          |
+| `key_count`    | `usize`     | Number of top-level keys in the root table when `success` is true.                  |
+| `doc`          | `?Document` | Parsed document (populated when `success=true`); caller must call `doc.?.deinit()`. |
 
-`parallel.extractKeys(allocator, inputs, results)` returns top-level key
-names as a comma-separated string per input.
-
-### What it does NOT do
-
-**`parseDocuments` is a fast shape-check, not a full parser.** It does
-*not* produce a `Document`, does *not* decode values, does *not* enforce
-the full TOML v1.0/v1.1 grammar (e.g. duplicate-key detection,
-array-of-tables semantics, or inline-table closure rules), and will
-accept inputs that `toml.parse` rejects. Use it for rejecting
-obviously-broken inputs at scale or pre-filtering; use `toml.parse` for
-any workload that needs a typed value tree.
-
-A future release (tracked as `U-A` in the gap analysis) will replace
-the shape-checker with the real parser under the same API. Until then,
-the signature is stable but the semantics are narrower than the name
-suggests.
+`parallel.validateDocuments(inputs, results)` and
+`parallel.extractKeys(allocator, inputs, results)` similarly delegate to
+the real parser; see the Thresholds section below for batching rules.
 
 ### Thresholds
 
@@ -596,6 +588,7 @@ for (&inputs) |*s| s.* = "key = \"value\"";
 
 var results: [16]toml.parallel.ParseResult = undefined;
 toml.parallel.parseDocuments(allocator, &inputs, &results);
+defer for (&results) |*r| if (r.doc) |*d| d.deinit();
 defer toml.parallel.deinitPool();
 
 for (results) |r| std.debug.assert(r.success);
