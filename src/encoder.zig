@@ -122,6 +122,10 @@ fn writeLeafValue(v: *const Value, writer: anytype) !void {
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .string => |s| try writeBasicString(s, writer),
         .float => |f| try writeFloat(f, writer),
+        .datetime => |dt| try dt.format(writer),
+        .datetime_local => |dt| try dt.format(writer),
+        .date_local => |d| try d.format(writer),
+        .time_local => |t| try t.format(writer),
         else => return error.Unimplemented,
     }
 }
@@ -219,6 +223,31 @@ test "encode string values with escapes" {
         "plain = \"hello\"\n" ++
         "quote = \"say \\\"hi\\\"\"\n" ++
         "tab = \"a\\tb\"\n";
+    try std.testing.expectEqualStrings(expected, aw.written());
+}
+
+test "encode datetime values delegate to Value format methods" {
+    const parser_mod = @import("parser.zig");
+    const input =
+        \\dt_utc = 2024-01-15T10:30:00Z
+        \\dt_local = 2024-01-15T10:30:00
+        \\d_local = 2024-01-15
+        \\t_local = 10:30:00
+        \\
+    ;
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    const expected =
+        "d_local = 2024-01-15\n" ++
+        "dt_local = 2024-01-15T10:30:00\n" ++
+        "dt_utc = 2024-01-15T10:30:00Z\n" ++
+        "t_local = 10:30:00\n";
     try std.testing.expectEqualStrings(expected, aw.written());
 }
 
