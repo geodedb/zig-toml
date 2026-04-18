@@ -4,6 +4,15 @@ Archive of gap-tracking entries that have been fully closed. Maintained alongsid
 
 Entry format: `<ID> | <Title> | Closing commit | Resolution date | Evidence`.
 
+## Plan 06 closure batch (2026-04-18, feat/encoder-suite)
+
+### Fully closed
+
+| Gap-ID | Title | Closing plan | Resolved | Evidence |
+|--------|-------|--------------|----------|----------|
+| GAP-0006 | TOML encoder not implemented | Plan 06 (`feat/encoder-suite`) | 2026-04-18 | `src/encoder.zig` full value-kind coverage; `tests/encoder_roundtrip.zig` 50-case corpus; `toml.encode` / `toml.EncodeOptions` public API |
+| GAP-0008 | Pretty-print / stable-sort output formatting missing | Plan 06 (`feat/encoder-suite`) | 2026-04-18 | `EncodeOptions` sort_keys/indent/inline_threshold; `tests/encoder_golden.zig` byte-exact contract |
+
 ## Phase 5 closure batch (2026-04-18, commits 037a918..befaff0)
 
 ### Fully closed

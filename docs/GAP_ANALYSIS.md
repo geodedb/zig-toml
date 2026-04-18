@@ -72,17 +72,14 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Addressed evidence:** `.gitlab-ci.yml` `.leak-gate` anchor wired into `test`, `test-release-safe`, `test-release-fast`, and `test-release-small`. `CONTRIBUTING.md` documents the gate. Commit `b62f27e`.
 - **Outstanding:** None for the in-tree testing surface. valgrind / ASan / TSan coverage of non-test code paths is tracked as a future enhancement under the umbrella issue #42 (Q-16) but is out of scope for REQ-18 as originally defined.
 
-### GAP-0006: TOML encoder not implemented
+### GAP-0006: TOML encoder not implemented -- CLOSED
 
 - **Issue:** [#6](https://gitlab.com/devnw/zig/toml/-/issues/6)
 - **Category:** Feature
 - **Severity:** High
 - **Requirement source:** REQ-06.
-- **Current state (evidence):** No `encoder.zig` / `Document.encode` code path.
-- **Why this is a gap:** Round-trip TOML support promised by the API surface is absent.
-- **Impact/Risk:** Library cannot serialize; blocks downstream tooling.
-- **Recommended fix:** Land a `src/encoder.zig` producing spec-compliant output; integrate with `Document`.
-- **Acceptance criteria:** Round-trip tests pass; toml-test encoder suite green.
+- **Addressed evidence:** `src/encoder.zig` (Plan 06) implements `encode(doc, writer, options)` with full coverage of integers, floats, booleans, strings, datetimes, inline arrays, inline tables, header tables, and arrays-of-tables. Round-trip corpus at `tests/encoder_roundtrip.zig` (50 cases) verifies parse -> encode -> parse equivalence via tagged-JSON projection. Public API wiring in `src/toml.zig` exposes `toml.encode` and `toml.EncodeOptions`.
+- **Outstanding:** toml-test encoder CLI binary (`GAP-0007`) still open; it is the command-line harness, not the encoder itself.
 
 ### GAP-0007: Encoder CLI not implemented
 
@@ -96,16 +93,13 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Recommended fix:** Add `src/bin/toml-test-encoder.zig` and a `build.zig` install step.
 - **Acceptance criteria:** Binary reads tagged JSON from stdin, writes TOML to stdout; passes toml-test encoder suite.
 
-### GAP-0008: Pretty-print / stable-sort output formatting missing
+### GAP-0008: Pretty-print / stable-sort output formatting missing -- CLOSED
 
 - **Issue:** [#8](https://gitlab.com/devnw/zig/toml/-/issues/8)
 - **Category:** Feature
 - **Severity:** High
 - **Requirement source:** REQ-08.
-- **Current state (evidence):** No formatter module; depends on GAP-0006.
-- **Why this is a gap:** Deterministic output is required for diffable config generation.
-- **Recommended fix:** Extend encoder with options struct (indent, sort keys, align `=`).
-- **Acceptance criteria:** Golden-file tests for pretty output.
+- **Addressed evidence:** `EncodeOptions` exposes `sort_keys` (default true), `indent` (default 0), and `inline_threshold` (default 8). `tests/encoder_golden.zig` locks byte-exact output: `sort_keys=true` is independent of input order at every level (root, inline tables, header tables); `sort_keys=false` preserves insertion order; `indent > 0` wraps inline arrays longer than `inline_threshold` across indented lines with a trailing comma per item.
 
 ### GAP-0009: Mutable Value API is internal-only; no public mutation surface
 

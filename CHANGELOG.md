@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Encoder: `src/encoder.zig` implements `encode(doc, writer, options)`
+  with full coverage of integers, floats (including `inf`/`-inf`/`nan`),
+  booleans, basic strings, all four datetime kinds, inline arrays,
+  inline tables, `[header]` sections, and `[[array-of-tables]]`
+  (closes GAP-0006). Public API: `toml.encode`, `toml.EncodeOptions`,
+  and the `toml.encoder` module.
+- Encoder: `EncodeOptions` exposes `sort_keys` (default `true`),
+  `indent` (default `0`), and `inline_threshold` (default `8`).
+  `sort_keys=true` sorts keys lexicographically at every level for
+  deterministic output; `indent > 0` wraps inline arrays longer than
+  `inline_threshold` across indented lines (closes GAP-0008).
+- Tests: `tests/encoder_roundtrip.zig` (50-case corpus) asserts
+  `parse(encode(parse(x)))` yields the same tagged-JSON projection as
+  `parse(x)` for every value kind and table shape.
+- Tests: `tests/encoder_golden.zig` locks byte-exact output for
+  sort_keys determinism and wrapped-array pretty-printing.
 - CI: `conformance-decoder` GitLab job runs the pinned BurntSushi/toml-test
   corpus against `zig-out/bin/toml-test-decoder` and uploads the full log
   as an artifact (closes GAP-0004).
