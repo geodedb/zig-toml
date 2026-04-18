@@ -29,7 +29,14 @@ pub const ParseOptions = parser_mod.ParseOptions;
 
 pub const json_tagged = @import("json_tagged.zig");
 
+pub const encoder = @import("encoder.zig");
+
 pub const parallel = @import("parallel.zig");
+
+comptime {
+    // Force Zig test discovery to walk the encoder module.
+    _ = encoder;
+}
 
 /// Parse TOML input into a Document.
 ///

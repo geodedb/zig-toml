@@ -38,6 +38,7 @@ const TimeLocal
 const TomlVersion
 const Value
 const ValueTag
+const encoder
 const error_mod
 const json_tagged
 const parallel
