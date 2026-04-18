@@ -138,7 +138,11 @@ pub fn parseDocuments(
     }
 
     const pool = getPool();
-    const chunk_size = @max(1, inputs.len / MAX_CHUNKS);
+    // Ceiling division ensures every input is placed into exactly one chunk.
+    // Previously `inputs.len / MAX_CHUNKS` (floor) caused the last
+    // `inputs.len % MAX_CHUNKS` elements to be silently dropped when
+    // `inputs.len > MAX_CHUNKS`, leaving `results[i]` undefined.
+    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
     var chunks: [MAX_CHUNKS]ParseChunk = undefined;
     var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
     var n: usize = 0;
@@ -291,7 +295,8 @@ pub fn validateDocuments(
     }
 
     const pool = getPool();
-    const chunk_size = @max(1, inputs.len / MAX_CHUNKS);
+    // Ceiling division: avoid dropping the tail of the input batch.
+    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
     var chunks: [MAX_CHUNKS]ValidateChunk = undefined;
     var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
     var n: usize = 0;
@@ -405,7 +410,8 @@ pub fn extractKeys(
     }
 
     const pool = getPool();
-    const chunk_size = @max(1, inputs.len / MAX_CHUNKS);
+    // Ceiling division: avoid dropping the tail of the input batch.
+    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
     var chunks: [MAX_CHUNKS]KeyExtractChunk = undefined;
     var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
     var n: usize = 0;
@@ -630,5 +636,78 @@ test "parallel extract keys - large batch" {
         if (result.keys) |keys| {
             allocator.free(keys);
         }
+    }
+}
+
+// Regression test: U-F -- when inputs.len > MAX_CHUNKS (64), the floor
+// division chunk_size previously dropped the tail of the batch. Use a
+// sentinel-initialized results array to catch any unwritten slot. All three
+// parallel entry points (parse/validate/extract) must touch every element.
+test "U-F no dropped inputs past MAX_CHUNKS - parseDocuments" {
+    const allocator = std.testing.allocator;
+    const N = 100;
+    var inputs: [N][]const u8 = undefined;
+    for (&inputs) |*input| input.* = "key = \"value\"";
+
+    // Pre-fill results with a sentinel that cannot be produced by a real parse
+    // so any untouched slot will fail the assertion below.
+    var results: [N]ParseResult = undefined;
+    for (&results) |*r| {
+        r.* = .{
+            .success = false,
+            .error_code = 0xFF,
+            .error_line = null,
+            .error_column = null,
+            .key_count = std.math.maxInt(usize),
+        };
+    }
+
+    parseDocuments(allocator, &inputs, &results);
+
+    for (results, 0..) |result, idx| {
+        try std.testing.expect(result.error_code != 0xFF); // slot was written
+        try std.testing.expect(result.success);
+        try std.testing.expectEqual(@as(usize, 1), result.key_count);
+        _ = idx;
+    }
+}
+
+test "U-F no dropped inputs past MAX_CHUNKS - validateDocuments" {
+    const N = 100;
+    var inputs: [N][]const u8 = undefined;
+    for (&inputs) |*input| input.* = "[table]\nkey = \"value\"";
+
+    var results: [N]ValidateResult = undefined;
+    for (&results) |*r| {
+        r.* = .{ .valid = false, .error_code = 0xFF, .error_msg = null };
+    }
+
+    validateDocuments(&inputs, &results);
+
+    for (results) |result| {
+        try std.testing.expect(result.error_code != 0xFF);
+        try std.testing.expect(result.valid);
+    }
+}
+
+test "U-F no dropped inputs past MAX_CHUNKS - extractKeys" {
+    const allocator = std.testing.allocator;
+    const N = 100;
+    var inputs: [N][]const u8 = undefined;
+    for (&inputs) |*input| input.* = "name = \"test\"\nversion = \"1.0\"";
+
+    var results: [N]KeyExtractResult = undefined;
+    // Sentinel: count = maxInt signals the slot was never written.
+    for (&results) |*r| {
+        r.* = .{ .keys = null, .count = std.math.maxInt(usize), .success = false };
+    }
+
+    extractKeys(allocator, &inputs, &results);
+
+    for (results) |result| {
+        try std.testing.expect(result.count != std.math.maxInt(usize));
+        try std.testing.expect(result.success);
+        try std.testing.expectEqual(@as(usize, 2), result.count);
+        if (result.keys) |keys| allocator.free(keys);
     }
 }
