@@ -643,7 +643,9 @@ pub const Parser = struct {
 
         // Typical inline tables have a handful of entries; 16 avoids the
         // initial reallocation ladder for essentially every real-world case.
-        var entries: std.ArrayList(TableEntry) = try .initCapacity(alloc, 16);
+        var map: std.StringArrayHashMapUnmanaged(*Value) = .{};
+        errdefer map.deinit(alloc);
+        try map.ensureTotalCapacity(alloc, 16);
 
         while (self.current.tag != .right_brace and self.current.tag != .eof) {
             // Check for newlines in v1.0 mode
@@ -691,37 +693,29 @@ pub const Parser = struct {
 
                 try val.tableSet(alloc, target, path.items[path.items.len - 1], value);
 
-                // Merge or add the root key
+                // Merge or add the root key. O(1) probe.
                 const root_key = path.items[0];
-                var found = false;
-                for (entries.items) |*entry| {
-                    if (std.mem.eql(u8, entry.key, root_key)) {
-                        // Cannot extend an inline table that was defined with { ... } syntax
-                        if (entry.value.* == .table and entry.value.table.is_closed_inline) {
-                            self.parse_error = err.makeError(.TableRedefined, self.current.pos, "cannot extend inline table with dotted key");
-                            return error.ParseFailed;
-                        }
-                        // Merge tables - fails if either side is not a table
-                        mergeTables(alloc, entry.value, current_table) catch {
-                            self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "cannot overwrite key with dotted key");
-                            return error.ParseFailed;
-                        };
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    try entries.append(alloc, .{ .key = try alloc.dupe(u8, root_key), .value = current_table });
-                }
-            } else {
-                // Check for duplicate key
-                for (entries.items) |entry| {
-                    if (std.mem.eql(u8, entry.key, path.items[0])) {
-                        self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "duplicate key in inline table");
+                if (map.get(root_key)) |existing_value| {
+                    // Cannot extend an inline table that was defined with { ... } syntax
+                    if (existing_value.* == .table and existing_value.table.is_closed_inline) {
+                        self.parse_error = err.makeError(.TableRedefined, self.current.pos, "cannot extend inline table with dotted key");
                         return error.ParseFailed;
                     }
+                    // Merge tables - fails if either side is not a table
+                    mergeTables(alloc, existing_value, current_table) catch {
+                        self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "cannot overwrite key with dotted key");
+                        return error.ParseFailed;
+                    };
+                } else {
+                    try map.put(alloc, try alloc.dupe(u8, root_key), current_table);
                 }
-                try entries.append(alloc, .{ .key = try alloc.dupe(u8, path.items[0]), .value = value });
+            } else {
+                // Check for duplicate key. O(1).
+                if (map.contains(path.items[0])) {
+                    self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "duplicate key in inline table");
+                    return error.ParseFailed;
+                }
+                try map.put(alloc, try alloc.dupe(u8, path.items[0]), value);
             }
 
             // Skip whitespace/newlines
@@ -763,15 +757,6 @@ pub const Parser = struct {
         }
         self.current = try self.nextToken();
 
-        // Convert the scratch entries list into the hash-indexed map
-        // form. Task 6 in the plan folds the dup-check into the insert
-        // and removes this final conversion pass.
-        var map: std.StringArrayHashMapUnmanaged(*Value) = .{};
-        errdefer map.deinit(alloc);
-        try map.ensureTotalCapacity(alloc, @intCast(entries.items.len));
-        for (entries.items) |e| {
-            map.putAssumeCapacity(e.key, e.value);
-        }
         return Value{ .table = .{ .map = map, .is_inline = true, .is_closed_inline = true } };
     }
 
