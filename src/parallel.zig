@@ -23,20 +23,27 @@
 //! ```zig
 //! const parallel = @import("parallel.zig");
 //!
+//! // Construct a caller-owned context once per batch workload.
+//! var ctx = try parallel.ParallelContext.initDefault(allocator);
+//! defer ctx.deinit();
+//!
 //! // Parse multiple TOML documents in parallel
 //! var inputs: [16][]const u8 = undefined;
 //! var results: [16]parallel.ParseResult = undefined;
 //!
 //! // Initialize inputs with TOML content...
-//! parallel.parseDocuments(allocator, &inputs, &results);
+//! ctx.parseDocuments(&inputs, &results);
+//! defer for (&results) |*r| if (r.doc) |d| d.deinit();
 //!
 //! // Validate multiple TOML documents
 //! var valid_results: [16]parallel.ValidateResult = undefined;
-//! parallel.validateDocuments(&inputs, &valid_results);
-//!
-//! // Cleanup: call deinitPool() when done
-//! parallel.deinitPool();
+//! ctx.validateDocuments(&inputs, &valid_results);
 //! ```
+//!
+//! The free-function forms (`parallel.parseDocuments`, `validateDocuments`,
+//! `extractKeys`, `getPool`, `deinitPool`) remain for 0.2.x but are
+//! deprecated and route through a process-global legacy context. They
+//! will be removed in 0.3.0.
 //!
 //! ## Performance Thresholds
 //!

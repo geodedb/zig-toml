@@ -432,8 +432,16 @@ bit-identical to the serial `toml.parse` path.
 
 ### Components
 
-- `getPool()` / `deinitPool()` -- lazy init of a process-global
-  `std.Thread.Pool`, guarded by a mutex.
+- `ParallelContext` -- caller-owned struct holding the `*ThreadPool`
+  and its allocator. Construct with `ParallelContext.initDefault`
+  (returns `!*ParallelContext`) and `defer ctx.deinit()`. All batch
+  methods (`parseDocuments` / `validateDocuments` / `extractKeys`) are
+  reentrant on a shared `*ParallelContext`; only `deinit` must be
+  serialized against in-flight method calls.
+- `getPool()` / `deinitPool()` -- deprecated shims around a process-
+  global legacy context, `std.once`-guarded so `getPool` takes no lock
+  after first init. `getPool` now returns `!*ThreadPool` rather than
+  panicking on init failure. Scheduled for removal in 0.3.0.
 - `parseDocuments` / `validateDocuments` / `extractKeys` -- split
   `inputs` into at most `MAX_CHUNKS` (64) chunks using ceiling
   division so every input lands in exactly one chunk, regardless of
