@@ -99,8 +99,23 @@ Tokenizes raw TOML input into a stream of tokens.
 | Datetime | datetime, datetime_local, date_local, time_local |
 | Special | newline, comment, eof |
 
-**Stateless Design:**
-The lexer is stateless between tokens. It does not maintain context about table headers or value positions - this is handled by the parser.
+**Minimal-State Streaming Design:**
+
+The `Lexer` struct carries a small, well-scoped set of fields across
+successive calls to `next()`:
+
+- `pos: Position` — streaming byte index / line / column cursor.
+- `version: TomlVersion` — locked at init; gates v1.1-only tokens such
+  as `time_local` without seconds.
+- `parse_error: ?ParseError` — populated on the first lexical error so
+  the parser can surface the diagnostic without re-scanning the input.
+- `utf8_error: bool` — latched when fused UTF-8 validation (Plan 05)
+  catches a bad sequence mid-scan.
+
+It does not maintain higher-level context such as table headers or
+value positions — those live on the parser. The intent is "as little
+state as practical," not "no state at all." Callers must treat the
+lexer as owning its own scan cursor and error latch.
 
 ### 3. Parser (parser.zig + parser/)
 
@@ -464,6 +479,39 @@ fan out batch operations (parse/validate/extract-keys) across worker
 threads via `submitBatch` + `WaitGroup`. Each worker thread invokes the
 real `toml.parseWithError` parser, so the accept/reject decision is
 bit-identical to the serial `toml.parse` path.
+
+```text
+          ┌────────────────────────────────────────────┐
+          │              User batch call               │
+          │  ctx.parseDocuments(&inputs, &results)     │
+          └────────────────────┬───────────────────────┘
+                               │
+                               ▼
+          ┌────────────────────────────────────────────┐
+          │      parallel.zig  (batch dispatcher)      │
+          │  - ParallelContext owns *ThreadPool         │
+          │  - chunk = ceilDiv(inputs.len, MAX_CHUNKS)  │
+          │  - submitBatch + WaitGroup                  │
+          └──────────┬─────────────────────────────────┘
+                     │ one chunk per worker
+                     ▼
+          ┌────────────────────────────────────────────┐
+          │  Per-input worker calls parseWithError()   │
+          │  — the SAME recursive-descent parser used  │
+          │  by toml.parse(). Accept/reject decision   │
+          │  is bit-identical to the serial path.      │
+          │                                            │
+          │  Each result carries a `doc: ?*Document`;  │
+          │  callers must deinit non-null docs to      │
+          │  release the per-document arena.           │
+          └────────────────────────────────────────────┘
+```
+
+Prior to Plan 01 (0.2.0), this submodule contained a byte-level
+"shape-checker" that silently accepted grammar-invalid inputs. That
+shadow parser has been deleted; the only TOML decision path in the
+library is now `toml.parse` / `toml.parseWithError`, whether invoked
+serially or via `toml.parallel`.
 
 ### Components
 

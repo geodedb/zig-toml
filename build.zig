@@ -80,6 +80,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_accept_tests = b.addRunArtifact(accept_tests);
 
+    // Documentation hygiene tests -- guard against drift between source
+    // files and ARCHITECTURE.md / CHANGELOG.md / PUBLIC_API.md. See
+    // tests/docs_hygiene_test.zig for the full rationale.
+    const docs_hygiene_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/docs_hygiene_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_docs_hygiene = b.addRunArtifact(docs_hygiene_tests);
+
     // Fuzz harness -- exercises toml.parse with random bytes via
     // std.testing.fuzz. Under `zig build test` this runs a single smoke
     // iteration so regressions that panic on well-formed inputs still fail
@@ -101,6 +113,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
+    test_step.dependOn(&run_docs_hygiene.step);
 
     // Benchmark harness (opt-in; not part of `test`).
     const bench_tests = b.addTest(.{
