@@ -52,29 +52,201 @@ const toml = @import("toml.zig");
 const Document = toml.Document;
 
 // ============================================================================
-// Global Thread Pool
+// Caller-Owned Thread Pool (Q-4 / S-4 / S-5 / P-7)
 // ============================================================================
+//
+// Prior versions exposed a process-global `?tp.ThreadPool` behind a mutex.
+// That singleton had three concrete defects:
+//
+//   Q-4 / S-4 (CWE-416): `getPool` returned a raw `*tp.ThreadPool` pointer;
+//     another thread calling `deinitPool` could free the pool while the
+//     first thread still held that pointer.
+//   S-5 (CWE-248/400):  `@panic("thread-pool: init failed")` on allocator
+//     failure turned a recoverable OOM into a DoS vector for library
+//     consumers who had no way to opt in to non-panicking behavior.
+//   P-7:                 The global used `std.heap.page_allocator`; every
+//     call took the mutex just to check a non-null pointer.
+//
+// The new shape is a `ParallelContext` the caller owns. `initDefault`
+// returns `!*ParallelContext`, `deinit` joins workers then frees the pool,
+// and the batch entry points are methods so the pool pointer cannot be
+// observed without a live reference to the context.
+//
+// The legacy `getPool` / `deinitPool` / free-function entry points remain
+// for one deprecation cycle. They route through a lazily-initialized
+// `legacy_ctx` global. Because `std.once` does not exist in Zig 0.16 we
+// implement the once-guard manually via an atomic "done" flag checked
+// on the hot path plus a mutex that only contends on the very first
+// call. After initialization completes, `callLegacyOnce` performs a
+// single acquire load and returns without locking. `getPool` now
+// returns `!*tp.ThreadPool` rather than a raw pointer. `deinitPool`
+// tears down the legacy context if it was constructed. Because no
+// concurrent-caller synchronization is possible on a process-global
+// singleton without reference counting, calling `deinitPool` while
+// other threads hold pointers returned by `getPool()` is undefined
+// behavior — which is exactly why the whole thing is deprecated.
 
-var global_pool: ?tp.ThreadPool = null;
-var pool_mutex: tp.sync.Mutex = .{};
+/// A caller-owned parallel execution context. Holds the thread pool and
+/// the allocator used to create it. Call `initDefault` to build one with
+/// the process default allocator, or construct via `initWithPool` to
+/// pass a custom `*tp.ThreadPool`.
+///
+/// Lifecycle: `ParallelContext` is NOT thread-safe to deinit concurrently
+/// with calls to its methods. The expected usage is:
+///
+///     var ctx = try ParallelContext.initDefault(allocator);
+///     defer ctx.deinit();
+///     ctx.parseDocuments(&inputs, &results);
+///
+/// All three batch entry points (`parseDocuments`, `validateDocuments`,
+/// `extractKeys`) are safe to invoke concurrently from multiple threads
+/// so long as the `ParallelContext` itself is not being deinit-ed.
+pub const ParallelContext = struct {
+    allocator: std.mem.Allocator,
+    pool: *tp.ThreadPool,
+    /// True if this context allocated its own pool via initDefault and
+    /// must free it in deinit. False if the caller constructed the
+    /// struct via initWithPool and retains lifetime responsibility.
+    owns_pool: bool,
 
-pub fn getPool() *tp.ThreadPool {
-    pool_mutex.lock();
-    defer pool_mutex.unlock();
-    if (global_pool == null) {
-        global_pool = tp.ThreadPool.init(std.heap.page_allocator, .{}) catch
-            @panic("thread-pool: init failed");
+    /// Construct a context with a private thread pool using the system
+    /// default thread count. Returns an error — never panics — on pool
+    /// allocation failure. Closes S-5.
+    pub fn initDefault(allocator: std.mem.Allocator) !*ParallelContext {
+        const pool = try allocator.create(tp.ThreadPool);
+        errdefer allocator.destroy(pool);
+        pool.* = try tp.ThreadPool.init(allocator, .{});
+        errdefer pool.deinit();
+
+        const ctx = try allocator.create(ParallelContext);
+        ctx.* = .{
+            .allocator = allocator,
+            .pool = pool,
+            .owns_pool = true,
+        };
+        return ctx;
     }
-    return &global_pool.?;
+
+    /// Wrap a pool the caller already owns. `deinit` will NOT free the
+    /// pool; the caller retains lifetime responsibility.
+    pub fn initWithPool(
+        allocator: std.mem.Allocator,
+        pool: *tp.ThreadPool,
+    ) !*ParallelContext {
+        const ctx = try allocator.create(ParallelContext);
+        ctx.* = .{
+            .allocator = allocator,
+            .pool = pool,
+            .owns_pool = false,
+        };
+        return ctx;
+    }
+
+    /// Joins all workers, frees the owned pool (if any), and destroys
+    /// the context itself. Safe to call exactly once.
+    pub fn deinit(self: *ParallelContext) void {
+        if (self.owns_pool) {
+            self.pool.deinit();
+            self.allocator.destroy(self.pool);
+        }
+        self.allocator.destroy(self);
+    }
+
+    // Method wrappers around the free functions defined later in this
+    // file. These exist so the method-call form works in the
+    // Q-4/S-4 test and in example code.
+
+    pub fn parseDocuments(
+        self: *ParallelContext,
+        inputs: []const []const u8,
+        results: []ParseResult,
+    ) void {
+        parseDocumentsCtx(self, inputs, results);
+    }
+
+    pub fn validateDocuments(
+        self: *ParallelContext,
+        inputs: []const []const u8,
+        results: []ValidateResult,
+    ) void {
+        validateDocumentsCtx(self, inputs, results);
+    }
+
+    pub fn extractKeys(
+        self: *ParallelContext,
+        inputs: []const []const u8,
+        results: []KeyExtractResult,
+    ) void {
+        extractKeysCtx(self, inputs, results);
+    }
+};
+
+// ============================================================================
+// Legacy global pool (deprecated — will be removed in 0.3.0)
+// ============================================================================
+//
+// Zig 0.16 removed `std.once`, so we implement the once-guard manually:
+//
+//   legacy_done: atomic flag — set to true after the first (possibly
+//     failing) initialization attempt.
+//   legacy_init_mutex: acquired only when `legacy_done == false`. The
+//     first thread through runs `legacyInit`; subsequent threads observe
+//     `legacy_done == true` and skip the mutex entirely.
+//
+// This makes the hot path a single acquire atomic load with no mutex
+// contention after startup — matching the P-7 goal.
+
+var legacy_done = std.atomic.Value(bool).init(false);
+var legacy_init_mutex: tp.sync.Mutex = .{};
+var legacy_ctx: ?*ParallelContext = null;
+var legacy_init_error: ?anyerror = null;
+
+fn legacyInit() void {
+    legacy_ctx = ParallelContext.initDefault(std.heap.page_allocator) catch |e| blk: {
+        legacy_init_error = e;
+        break :blk null;
+    };
 }
 
+/// Ensure `legacyInit` has been called exactly once across all threads.
+/// Fast path: atomic acquire load observes `true` → no lock taken.
+/// Slow path: acquire the mutex, re-check under lock, run init, publish
+/// `true` with release semantics so other threads see a fully
+/// initialized `legacy_ctx` / `legacy_init_error`.
+fn callLegacyOnce() void {
+    if (legacy_done.load(.acquire)) return;
+    legacy_init_mutex.lock();
+    defer legacy_init_mutex.unlock();
+    if (legacy_done.load(.monotonic)) return;
+    legacyInit();
+    legacy_done.store(true, .release);
+}
+
+/// Deprecated. Use `ParallelContext.initDefault` instead.
+/// Returns the legacy process-global thread pool. Unlike the prior
+/// version, this returns an error rather than @panicking.
+pub fn getPool() !*tp.ThreadPool {
+    callLegacyOnce();
+    if (legacy_init_error) |e| return e;
+    const ctx = legacy_ctx orelse return error.ThreadPoolInitFailed;
+    return ctx.pool;
+}
+
+/// Deprecated. Callers should own a `ParallelContext` and call
+/// `ctx.deinit()` instead.
+///
+/// For backward compatibility this still tears down the legacy global
+/// pool if it was lazily constructed. See the module-level comment for
+/// UB caveats when other threads hold pointers.
 pub fn deinitPool() void {
-    pool_mutex.lock();
-    defer pool_mutex.unlock();
-    if (global_pool) |*pool| {
-        pool.deinit();
-        global_pool = null;
+    legacy_init_mutex.lock();
+    defer legacy_init_mutex.unlock();
+    if (legacy_ctx) |ctx| {
+        ctx.deinit();
+        legacy_ctx = null;
     }
+    legacy_init_error = null;
+    legacy_done.store(false, .release);
 }
 
 // ============================================================================
@@ -130,10 +302,57 @@ fn parseChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
     }
 }
 
-/// Parse multiple TOML documents in parallel.
+/// Parse multiple TOML documents in parallel using the given context.
 ///
 /// Each document is parsed independently. This is ideal for batch
 /// processing configuration files.
+pub fn parseDocumentsCtx(
+    ctx: *ParallelContext,
+    inputs: []const []const u8,
+    results: []ParseResult,
+) void {
+    std.debug.assert(inputs.len == results.len);
+
+    if (inputs.len < 4) {
+        for (inputs, 0..) |input, i| {
+            results[i] = parseDocument(ctx.allocator, input);
+        }
+        return;
+    }
+
+    const pool = ctx.pool;
+    // Ceiling division ensures every input is placed into exactly one chunk.
+    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]ParseChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len and n < MAX_CHUNKS) {
+        const end = @min(i + chunk_size, inputs.len);
+        chunks[n] = .{
+            .allocator = ctx.allocator,
+            .inputs = inputs[i..end],
+            .results = results[i..end],
+        };
+        batch[n] = .{ .task_fn = &parseChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        n += 1;
+        i = end;
+    }
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        for (inputs, 0..) |input, j| results[j] = parseDocument(ctx.allocator, input);
+        return;
+    };
+    wg.wait();
+}
+
+/// Deprecated. Use `ParallelContext.parseDocuments` or
+/// `parseDocumentsCtx`. This shim borrows the legacy global pool for
+/// scheduling but uses the caller-supplied allocator for chunk and
+/// document allocations (preserving the pre-refactor contract that
+/// every Document's arena is seeded from the caller's allocator).
+/// Silently falls back to sequential processing on pool initialization
+/// failure instead of @panicking.
 ///
 /// Parameters:
 /// - allocator: Memory allocator for parsing
@@ -155,11 +374,15 @@ pub fn parseDocuments(
         return;
     }
 
-    const pool = getPool();
-    // Ceiling division ensures every input is placed into exactly one chunk.
-    // Previously `inputs.len / MAX_CHUNKS` (floor) caused the last
-    // `inputs.len % MAX_CHUNKS` elements to be silently dropped when
-    // `inputs.len > MAX_CHUNKS`, leaving `results[i]` undefined.
+    callLegacyOnce();
+    const legacy = legacy_ctx orelse {
+        for (inputs, 0..) |input, i| {
+            results[i] = parseDocument(allocator, input);
+        }
+        return;
+    };
+
+    const pool = legacy.pool;
     const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
     var chunks: [MAX_CHUNKS]ParseChunk = undefined;
     var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
@@ -252,7 +475,47 @@ fn validateChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
     }
 }
 
-/// Validate multiple TOML documents in parallel.
+/// Validate multiple TOML documents in parallel using the given context.
+pub fn validateDocumentsCtx(
+    ctx: *ParallelContext,
+    inputs: []const []const u8,
+    results: []ValidateResult,
+) void {
+    std.debug.assert(inputs.len == results.len);
+
+    if (inputs.len < 8) {
+        for (inputs, 0..) |input, i| {
+            results[i] = validateDocument(input);
+        }
+        return;
+    }
+
+    const pool = ctx.pool;
+    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]ValidateChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len and n < MAX_CHUNKS) {
+        const end = @min(i + chunk_size, inputs.len);
+        chunks[n] = .{ .inputs = inputs[i..end], .results = results[i..end] };
+        batch[n] = .{ .task_fn = &validateChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        n += 1;
+        i = end;
+    }
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        for (inputs, 0..) |input, j| results[j] = validateDocument(input);
+        return;
+    };
+    wg.wait();
+}
+
+/// Deprecated. Use `ParallelContext.validateDocuments` or
+/// `validateDocumentsCtx`. Borrows the legacy global pool for
+/// scheduling; validateDocument itself uses an internal ArenaAllocator
+/// seeded from `std.heap.page_allocator` so no caller allocator is
+/// required on this path.
 ///
 /// Performs syntax validation without full parsing.
 ///
@@ -274,26 +537,14 @@ pub fn validateDocuments(
         return;
     }
 
-    const pool = getPool();
-    // Ceiling division: avoid dropping the tail of the input batch.
-    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
-    var chunks: [MAX_CHUNKS]ValidateChunk = undefined;
-    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < inputs.len and n < MAX_CHUNKS) {
-        const end = @min(i + chunk_size, inputs.len);
-        chunks[n] = .{ .inputs = inputs[i..end], .results = results[i..end] };
-        batch[n] = .{ .task_fn = &validateChunkTask, .ctx = @ptrCast(&chunks[n]) };
-        n += 1;
-        i = end;
+    callLegacyOnce();
+    if (legacy_ctx) |ctx| {
+        validateDocumentsCtx(ctx, inputs, results);
+    } else {
+        for (inputs, 0..) |input, i| {
+            results[i] = validateDocument(input);
+        }
     }
-    var wg = pool.waitGroup();
-    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
-        for (inputs, 0..) |input, j| results[j] = validateDocument(input);
-        return;
-    };
-    wg.wait();
 }
 
 fn validateDocument(input: []const u8) ValidateResult {
@@ -361,7 +612,52 @@ fn keyExtractChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
     }
 }
 
-/// Extract top-level keys from multiple TOML documents in parallel.
+/// Extract top-level keys from multiple TOML documents in parallel
+/// using the given context.
+pub fn extractKeysCtx(
+    ctx: *ParallelContext,
+    inputs: []const []const u8,
+    results: []KeyExtractResult,
+) void {
+    std.debug.assert(inputs.len == results.len);
+
+    if (inputs.len < 8) {
+        for (inputs, 0..) |input, i| {
+            results[i] = extractKeysFromDocument(ctx.allocator, input);
+        }
+        return;
+    }
+
+    const pool = ctx.pool;
+    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]KeyExtractChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len and n < MAX_CHUNKS) {
+        const end = @min(i + chunk_size, inputs.len);
+        chunks[n] = .{
+            .allocator = ctx.allocator,
+            .inputs = inputs[i..end],
+            .results = results[i..end],
+        };
+        batch[n] = .{ .task_fn = &keyExtractChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        n += 1;
+        i = end;
+    }
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        for (inputs, 0..) |input, j| results[j] = extractKeysFromDocument(ctx.allocator, input);
+        return;
+    };
+    wg.wait();
+}
+
+/// Deprecated. Use `ParallelContext.extractKeys` or `extractKeysCtx`.
+/// Borrows the legacy global pool for scheduling but uses the
+/// caller-supplied allocator for the per-result key buffers (preserving
+/// the pre-refactor contract that `result.keys` is allocated from the
+/// caller's allocator).
 ///
 /// Parameters:
 /// - allocator: Memory allocator for key strings
@@ -383,8 +679,15 @@ pub fn extractKeys(
         return;
     }
 
-    const pool = getPool();
-    // Ceiling division: avoid dropping the tail of the input batch.
+    callLegacyOnce();
+    const legacy = legacy_ctx orelse {
+        for (inputs, 0..) |input, i| {
+            results[i] = extractKeysFromDocument(allocator, input);
+        }
+        return;
+    };
+
+    const pool = legacy.pool;
     const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
     var chunks: [MAX_CHUNKS]KeyExtractChunk = undefined;
     var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
