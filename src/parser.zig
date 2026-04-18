@@ -329,15 +329,15 @@ pub const Parser = struct {
                 const text = self.current.slice(self.input);
                 // Check if it contains a dot (not inf/nan)
                 if (std.mem.indexOf(u8, text, ".")) |dot_pos| {
-                    // Split into parts
-                    try path.append(alloc, try alloc.dupe(u8, text[0..dot_pos]));
+                    // Split into parts. Slices are arena-owned (P-5).
+                    try path.append(alloc, text[0..dot_pos]);
                     var rest = text[dot_pos + 1 ..];
                     // Handle multiple dots (like 1.2.3)
                     while (std.mem.indexOf(u8, rest, ".")) |next_dot| {
-                        try path.append(alloc, try alloc.dupe(u8, rest[0..next_dot]));
+                        try path.append(alloc, rest[0..next_dot]);
                         rest = rest[next_dot + 1 ..];
                     }
-                    try path.append(alloc, try alloc.dupe(u8, rest));
+                    try path.append(alloc, rest);
                     self.current = try self.nextToken();
                     // Check if there's more path
                     if (self.current.tag == .dot) {
@@ -415,7 +415,9 @@ pub const Parser = struct {
                 self.current = try self.nextToken();
             },
             .literal_string => {
-                result.* = .{ .string = try alloc.dupe(u8, self.decodeLiteralString(self.current.slice(self.input))) };
+                // Slice is arena-owned (P-5); no content transformation
+                // for literal strings, so no dupe needed.
+                result.* = .{ .string = self.decodeLiteralString(self.current.slice(self.input)) };
                 self.current = try self.nextToken();
             },
             .ml_basic_string => {
@@ -423,7 +425,7 @@ pub const Parser = struct {
                 self.current = try self.nextToken();
             },
             .ml_literal_string => {
-                result.* = .{ .string = try alloc.dupe(u8, self.decodeMultilineLiteralString(self.current.slice(self.input))) };
+                result.* = .{ .string = self.decodeMultilineLiteralString(self.current.slice(self.input)) };
                 self.current = try self.nextToken();
             },
             .integer => {
@@ -715,7 +717,8 @@ pub const Parser = struct {
                         return error.ParseFailed;
                     };
                 } else {
-                    try map.put(alloc, try alloc.dupe(u8, root_key), current_table);
+                    // root_key is arena-owned (P-5); no dupe.
+                    try map.put(alloc, root_key, current_table);
                 }
             } else {
                 // Check for duplicate key. O(1).
@@ -723,7 +726,7 @@ pub const Parser = struct {
                     self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "duplicate key in inline table");
                     return error.ParseFailed;
                 }
-                try map.put(alloc, try alloc.dupe(u8, path.items[0]), value);
+                try map.put(alloc, path.items[0], value);
             }
 
             // Skip whitespace/newlines
