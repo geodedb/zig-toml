@@ -55,6 +55,21 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // CLI binary: toml-test-encoder (inverse of toml-test-decoder; reads
+    // tagged-JSON stdin and writes TOML to stdout).
+    const enc_exe = b.addExecutable(.{
+        .name = "toml-test-encoder",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bin/toml_test_encoder.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    b.installArtifact(enc_exe);
+
     // Unit tests
     const unit_test_mod = b.createModule(.{
         .root_source_file = b.path("src/toml.zig"),
