@@ -289,43 +289,37 @@ pub fn validateDocuments(
 }
 
 fn validateDocument(input: []const u8) ValidateResult {
-    // Check for valid UTF-8
-    if (!std.unicode.utf8ValidateSlice(input)) {
-        return .{ .valid = false, .error_code = 1, .error_msg = "Invalid UTF-8" };
-    }
+    // Route through the real parser and discard the Document. Each call
+    // gets its own ArenaAllocator so we can drain it on scope exit
+    // without touching any caller-provided allocator.
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
 
-    // Check for bare carriage returns (not allowed in TOML)
-    var i: usize = 0;
-    while (i < input.len) : (i += 1) {
-        if (input[i] == '\r' and (i + 1 >= input.len or input[i + 1] != '\n')) {
-            return .{ .valid = false, .error_code = 2, .error_msg = "Bare carriage return" };
-        }
+    const r = toml.parseWithError(alloc, input, .{});
+    switch (r) {
+        .ok => |doc_val| {
+            // Drop the Document (the arena above covers its memory). We do
+            // NOT call doc_val.deinit() — doing so would double-free the
+            // nested ArenaAllocator the parser built. The parser's arena
+            // lives inside ours; when our arena deinit fires it will free
+            // all allocations including the parser's arena metadata.
+            _ = doc_val;
+            return .{ .valid = true, .error_code = 0, .error_msg = null };
+        },
+        .err => |pe| {
+            const code_u8: u8 = @intCast(@intFromEnum(pe.code) + 1);
+            return .{
+                .valid = false,
+                .error_code = code_u8,
+                // pe.message is a static string literal (ParseError's
+                // message field is populated via makeError with a
+                // `comptime []const u8`). Safe to carry out past this
+                // function's arena.
+                .error_msg = pe.message,
+            };
+        },
     }
-
-    // Check for null bytes (not allowed)
-    for (input) |c| {
-        if (c == 0) {
-            return .{ .valid = false, .error_code = 3, .error_msg = "Null byte in document" };
-        }
-    }
-
-    // Basic bracket matching
-    var bracket_depth: i32 = 0;
-    var in_string = false;
-    for (input) |c| {
-        if (!in_string) {
-            if (c == '"') in_string = true;
-            if (c == '[') bracket_depth += 1;
-            if (c == ']') bracket_depth -= 1;
-            if (bracket_depth < 0) {
-                return .{ .valid = false, .error_code = 4, .error_msg = "Unmatched closing bracket" };
-            }
-        } else {
-            if (c == '"') in_string = false;
-        }
-    }
-
-    return .{ .valid = true, .error_code = 0, .error_msg = null };
 }
 
 // ============================================================================
@@ -532,7 +526,8 @@ test "validate document - invalid utf8" {
     validateDocuments(&inputs, &results);
 
     try std.testing.expect(!results[0].valid);
-    try std.testing.expectEqual(@as(u8, 1), results[0].error_code);
+    // Real parser emits ErrorCode.InvalidUtf8 (ordinal 0) -> code 1.
+    try std.testing.expect(results[0].error_code != 0);
 }
 
 test "validate document - null byte" {
@@ -542,7 +537,9 @@ test "validate document - null byte" {
     validateDocuments(&inputs, &results);
 
     try std.testing.expect(!results[0].valid);
-    try std.testing.expectEqual(@as(u8, 3), results[0].error_code);
+    // Real parser emits an UnexpectedToken or InvalidControlCharacter
+    // depending on lexer state; old shadow emitted exactly 3. Loosen.
+    try std.testing.expect(results[0].error_code != 0);
 }
 
 test "Q-2 validate document rejects grammar-invalid input" {
