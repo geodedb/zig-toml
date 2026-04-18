@@ -44,7 +44,7 @@ test "B-1 parse 10k top-level keys (baseline)" {
     defer alloc.free(input);
 
     const t0 = monotonicNs();
-    var doc = try toml.parse(alloc, input, .{});
+    const doc = try toml.parse(alloc, input, .{});
     defer doc.deinit();
     const elapsed_ns = monotonicNs() - t0;
 
@@ -96,7 +96,7 @@ test "B-2 parse 1000-key inline table (P-12 regression pin)" {
     defer alloc.free(input);
 
     const t0 = monotonicNs();
-    var doc = try toml.parse(alloc, input, .{});
+    const doc = try toml.parse(alloc, input, .{});
     defer doc.deinit();
     const elapsed_ns = monotonicNs() - t0;
 

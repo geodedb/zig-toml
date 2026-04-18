@@ -75,7 +75,7 @@ pub fn main() !void {
         \\url = "postgres://localhost/db"
     ;
 
-    var doc = try toml.parse(allocator, input, .{});
+    const doc = try toml.parse(allocator, input, .{});
     defer doc.deinit();
 
     // Access values
@@ -117,26 +117,26 @@ switch (result) {
 
 ```zig
 // TOML v1.1.0 (default)
-var doc = try toml.parse(allocator, input, .{ .version = .v1_1_0 });
+const doc = try toml.parse(allocator, input, .{ .version = .v1_1_0 });
 
 // TOML v1.0.0 strict mode
-var doc = try toml.parse(allocator, input, .{ .version = .v1_0_0 });
+const doc = try toml.parse(allocator, input, .{ .version = .v1_0_0 });
 ```
 
 ### Tagged JSON Output (toml-test format)
 
 ```zig
-var doc = try toml.parse(allocator, input, .{});
+const doc = try toml.parse(allocator, input, .{});
 defer doc.deinit();
 
 const stdout = std.io.getStdOut().writer();
-try toml.writeTaggedJson(&doc, stdout);
+try toml.writeTaggedJson(doc, stdout);
 ```
 
 ### Limits
 
 ```zig
-var doc = try toml.parse(allocator, input, .{
+const doc = try toml.parse(allocator, input, .{
     .max_depth = 64,              // Maximum nesting depth (default: 128)
     .max_bytes = 1024 * 1024,     // Maximum input size (default: 16MB)
 });
@@ -156,7 +156,7 @@ for (&inputs) |*s| s.* = "key = \"value\"";
 
 var results: [32]toml.parallel.ParseResult = undefined;
 toml.parallel.parseDocuments(allocator, &inputs, &results);
-defer for (&results) |*r| if (r.doc) |*d| d.deinit();
+defer for (&results) |*r| if (r.doc) |d| d.deinit();
 defer toml.parallel.deinitPool();
 ```
 
@@ -232,7 +232,7 @@ pub const Document = struct {
     pub fn getPath(self: *const Document, path: []const []const u8) ?*const Value;
 };
 
-pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !Document;
+pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !*Document;
 pub fn parseWithError(alloc: Allocator, input: []const u8, opts: ParseOptions) ParseResult;
 pub fn writeTaggedJson(doc: *const Document, writer: anytype) !void;
 ```

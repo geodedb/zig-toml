@@ -25,7 +25,7 @@ pub fn main() !void {
         \\port = 8080
     ;
 
-    var doc = try toml.parse(allocator, input, .{});
+    const doc = try toml.parse(allocator, input, .{});
     defer doc.deinit();
 
     if (doc.root.get("server")) |server| {
@@ -41,7 +41,7 @@ pub fn main() !void {
 ### parse
 
 ```zig
-pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !Document
+pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !*Document
 ```
 
 **Description:** Parse TOML input into a Document.
@@ -54,7 +54,9 @@ pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !Document
 | input | []const u8 | TOML source text (must be valid UTF-8) |
 | opts | ParseOptions | Configuration options for parsing |
 
-**Returns:** `Document` - The parsed document containing the root table
+**Returns:** `*Document` - Pointer to a heap-allocated Document containing
+the root table. The caller must call `doc.deinit()` to free the
+Document's arena and the Document struct itself.
 
 **Errors:**
 
@@ -66,7 +68,7 @@ pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !Document
 **Example:**
 
 ```zig
-var doc = try toml.parse(allocator, "key = \"value\"", .{});
+const doc = try toml.parse(allocator, "key = \"value\"", .{});
 defer doc.deinit();
 
 const val = doc.root.get("key").?.string;
@@ -90,14 +92,14 @@ pub fn parseWithError(alloc: Allocator, input: []const u8, opts: ParseOptions) P
 | input | []const u8 | TOML source text (must be valid UTF-8) |
 | opts | ParseOptions | Configuration options for parsing |
 
-**Returns:** `ParseResult` - Union of `ok: Document` or `err: ParseError`
+**Returns:** `ParseResult` - Union of `ok: *Document` or `err: ParseError`
 
 **Example:**
 
 ```zig
 const result = toml.parseWithError(allocator, input, .{});
 switch (result) {
-    .ok => |*doc| {
+    .ok => |doc| {
         defer doc.deinit();
         // Use document...
     },
@@ -129,11 +131,11 @@ pub fn writeTaggedJson(doc: *const Document, writer: anytype) !void
 **Example:**
 
 ```zig
-var doc = try toml.parse(allocator, "a = 42", .{});
+const doc = try toml.parse(allocator, "a = 42", .{});
 defer doc.deinit();
 
 const stdout = std.io.getStdOut().writer();
-try toml.writeTaggedJson(&doc, stdout);
+try toml.writeTaggedJson(doc, stdout);
 // Output: {"a":{"type":"integer","value":"42"}}
 ```
 
@@ -193,7 +195,12 @@ Parsed TOML document with memory ownership.
 ```zig
 pub const Document = struct {
     root: *Value,
-    arena: std.heap.ArenaAllocator,
+    arena: *std.heap.ArenaAllocator,
+    gpa: Allocator,
+
+    // `toml.parse` returns `*Document`. The struct is heap-allocated
+    // on the same allocator passed to `parse`; both the arena and the
+    // struct are freed by `deinit`.
 
     pub fn deinit(self: *Document) void;
     pub fn getPath(self: *const Document, path: []const []const u8) ?*const Value;
@@ -444,7 +451,7 @@ Result type for parseWithError.
 
 ```zig
 pub const ParseResult = union(enum) {
-    ok: Document,
+    ok: *Document,
     err: ParseError,
 };
 ```
@@ -461,7 +468,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
     defer allocator.free(content);
 
-    var doc = try toml.parse(allocator, content, .{});
+    const doc = try toml.parse(allocator, content, .{});
     defer doc.deinit();
 
     return Config{
@@ -494,10 +501,24 @@ const port: u16 = if (doc.root.get("port")) |p| @intCast(p.integer) else 8080;
 
 ```zig
 // TOML v1.0.0 strict mode
-var doc_v1 = try toml.parse(allocator, input, .{ .version = .v1_0_0 });
+const doc_v1 = try toml.parse(allocator, input, .{ .version = .v1_0_0 });
 
 // TOML v1.1.0 (default, allows trailing commas in inline tables)
-var doc_v11 = try toml.parse(allocator, input, .{ .version = .v1_1_0 });
+const doc_v11 = try toml.parse(allocator, input, .{ .version = .v1_1_0 });
+```
+
+### Input Lifetime
+
+The input buffer passed to `toml.parse` may be freed immediately after
+`parse` returns. The parser copies the bytes into the Document's arena
+during `parse`, so every string, bare key, and path segment stored in
+the returned `Document` is arena-owned.
+
+```zig
+const input_copy = try allocator.dupe(u8, user_input);
+const doc = try toml.parse(allocator, input_copy, .{});
+allocator.free(input_copy); // safe — doc owns its own copy
+defer doc.deinit();
 ```
 
 ## Memory Management
@@ -511,7 +532,7 @@ The Document type uses an ArenaAllocator internally. All parsed data is owned by
 **Important:** Do not store references to values after calling `deinit()`.
 
 ```zig
-var doc = try toml.parse(allocator, input, .{});
+const doc = try toml.parse(allocator, input, .{});
 const host = doc.root.get("host").?.string;  // Valid
 doc.deinit();
 // host is now invalid - do not use!
@@ -557,7 +578,7 @@ Each input produces a `ParseResult` with the following fields:
 | `error_line`   | `?usize`    | 1-based line of the first parse error (null on success).                            |
 | `error_column` | `?usize`    | 1-based column of the first parse error (null on success).                          |
 | `key_count`    | `usize`     | Number of top-level keys in the root table when `success` is true.                  |
-| `doc`          | `?Document` | Parsed document (populated when `success=true`); caller must call `doc.?.deinit()`. |
+| `doc`          | `?*Document` | Parsed document (populated when `success=true`); caller must call `doc.?.deinit()`. |
 
 `parallel.validateDocuments(inputs, results)` and
 `parallel.extractKeys(allocator, inputs, results)` similarly delegate to
@@ -588,7 +609,7 @@ for (&inputs) |*s| s.* = "key = \"value\"";
 
 var results: [16]toml.parallel.ParseResult = undefined;
 toml.parallel.parseDocuments(allocator, &inputs, &results);
-defer for (&results) |*r| if (r.doc) |*d| d.deinit();
+defer for (&results) |*r| if (r.doc) |d| d.deinit();
 defer toml.parallel.deinitPool();
 
 for (results) |r| std.debug.assert(r.success);

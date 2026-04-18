@@ -152,7 +152,7 @@ Defines the data structures for parsed TOML values.
 
 ```zig
 Value (tagged union)
-├── table: Table { entries: []TableEntry, flags... }
+├── table: Table { map: StringArrayHashMapUnmanaged(*Value), flags... }
 ├── array: Array { items: []*Value }
 ├── string: []const u8
 ├── integer: i64
@@ -278,18 +278,24 @@ doc.getPath(["server", "db", "host"])
     │
     ▼
 ┌─────────────────────────────────────────────────┐
-│  root.table.entries                             │
+│  root.table.map (StringArrayHashMapUnmanaged,   │
+│                  insertion-ordered)             │
 │    ├── "server" ─────────────────┐              │
 │    │       │                     │              │
 │    │       ▼                     │              │
-│    │   table.entries             │              │
+│    │   table.map                 │              │
 │    │     └── "db" ───────────────┤              │
 │    │           │                 │              │
 │    │           ▼                 │              │
-│    │       table.entries         │              │
+│    │       table.map             │              │
 │    │         └── "host" ─────────┴──▶ Value     │
 └─────────────────────────────────────────────────┘
 ```
+
+`Value.Table` uses `std.StringArrayHashMapUnmanaged(*Value)` as its
+backing store. Iteration via `tableIterator` yields entries in insertion
+order; lookups via `get` / `getPath` are O(1) amortized. This closes the
+P-1 / P-2 / P-12 quadratic-insert/lookup defects.
 
 ## Version Differences
 

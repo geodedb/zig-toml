@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (BREAKING)
 
-- `parallel.ParseResult` gained a `doc: ?Document` field. Callers MUST
+- `parallel.ParseResult` gained a `doc: ?*Document` field. Callers MUST
   drain any non-null `doc` with `result.doc.?.deinit()` (or iterate and
   deinit each result in a loop) to free the per-document arena. All
   existing fields default-init, so struct initializer code that omits
@@ -26,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   input.
 - `toml-test-decoder` CLI uses `std.heap.smp_allocator` in release
   builds; `DebugAllocator` is gated on `builtin.mode == .Debug` only.
+- `Value.Table.entries: []TableEntry` replaced with
+  `Value.Table.map: std.StringArrayHashMapUnmanaged(*Value)`. Inserts,
+  lookups, and dup-checks are now O(1) amortized. Iteration order is
+  preserved. Closes P-1, P-2, P-12.
+- `toml.parse` and `toml.parseWithError` return `*Document` /
+  `ParseResult { ok: *Document, err: ParseError }` instead of
+  `Document` by value. Migration: change
+  `var doc = try toml.parse(...)` to `const doc = try toml.parse(...)`;
+  `defer doc.deinit();` is unchanged (it is now a method on
+  `*Document`). Closes Q-12.
 
 ### Migration from 0.1.0
 
@@ -42,14 +52,26 @@ After:
 ```zig
 var results: [N]toml.parallel.ParseResult = undefined;
 toml.parallel.parseDocuments(alloc, &inputs, &results);
-defer for (&results) |*r| if (r.doc) |*d| d.deinit();
+defer for (&results) |*r| if (r.doc) |d| d.deinit();
 for (results) |r| {
     if (r.success) {
-        // r.doc.? is the parsed Document — read values directly.
+        // r.doc.? is the parsed *Document — read values directly.
     } else {
         // r.error_code, r.error_line, r.error_column describe the failure.
     }
 }
+```
+
+Also, for the serial API:
+
+```zig
+// Before:
+var doc = try toml.parse(alloc, input, .{});
+defer doc.deinit();
+
+// After:
+const doc = try toml.parse(alloc, input, .{});
+defer doc.deinit();
 ```
 
 ### Added
@@ -59,9 +81,23 @@ for (results) |r| {
   real target instead of a no-op.
 - Defense-in-depth recursion guards (`enterDepth` / `exitDepth`) applied
   to every recursive-descent entrypoint in the parser.
+- `tableIterator`, `tableLen`, `arrayLen`, `arrayItems` helpers in
+  `src/value.zig` / re-exported via `toml.value_mod`. Replace direct
+  access to the old `table.entries: []TableEntry` field.
+- Performance benchmark harness (`zig build bench`) with hard ceilings
+  for 10k top-level keys (<200ms ReleaseFast) and 1000-entry inline
+  tables (<50ms ReleaseFast).
 
 ### Fixed
 
+- Bare-key and literal-string storage are now fully arena-owned
+  (`Parser.parse` copies input into its arena before tokenizing).
+  Callers may free the input buffer as soon as `toml.parse` returns.
+  Closes P-5.
+- `Document` now holds `*ArenaAllocator` (pointer-owned). `toml.parse`
+  returns `*Document`. This eliminates a latent move-by-value bug
+  where the embedded `*anyopaque` in the arena's Allocator handle
+  captured an old address. Closes Q-12.
 - GAP-0001 / Q-1: `parallel.parseDocuments` no longer diverges from
   `toml.parse` on accept/reject decisions.
 - Q-2: `parallel.validateDocuments` now validates against the full TOML
