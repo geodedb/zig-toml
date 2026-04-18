@@ -628,44 +628,49 @@ test "parallel extract keys - large batch" {
 // success=false and update error_code to the appropriate value.
 // ============================================================================
 
-test "U-M diverges from toml.parse: double equals (xfail: fixed by U-A)" {
+test "U-M aligned with toml.parse: double equals rejected" {
     const allocator = std.testing.allocator;
     const inputs = [_][]const u8{"a = = 1\n"};
     var results: [1]ParseResult = undefined;
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
-    // CURRENT behavior: shape-checker sees two `=` signs, no unterminated
-    // strings, no other structural markers -- it returns success.
-    try std.testing.expect(results[0].success);
-    // U-A will make this expect(!results[0].success) with error_code
-    // reflecting the UnexpectedToken diagnostic from the real parser.
+    try std.testing.expect(!results[0].success);
+    try std.testing.expect(results[0].error_code != 0);
+    try std.testing.expect(results[0].error_line != null);
 }
 
-test "U-M diverges from toml.parse: unclosed table (xfail: fixed by U-A)" {
+test "U-M aligned with toml.parse: unclosed table rejected" {
     const allocator = std.testing.allocator;
     const inputs = [_][]const u8{"[unclosed table\n"};
     var results: [1]ParseResult = undefined;
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
-    // CURRENT behavior: the shape-checker does not track bracket balance
-    // for table headers, only for inline-array detection. Returns success.
-    try std.testing.expect(results[0].success);
-    // U-A will make this error out on missing `]`.
+    try std.testing.expect(!results[0].success);
+    try std.testing.expect(results[0].error_code != 0);
 }
 
-test "U-M diverges from toml.parse: duplicate keys (xfail: fixed by U-A)" {
+test "U-M aligned with toml.parse: duplicate keys rejected" {
     const allocator = std.testing.allocator;
     const inputs = [_][]const u8{"a = 1\na = 2\n"};
     var results: [1]ParseResult = undefined;
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
-    // CURRENT behavior: shape-checker does not build a symbol table, so
-    // it cannot detect duplicate keys. Returns success.
-    try std.testing.expect(results[0].success);
-    // U-A will make this error out with DuplicateKey.
+    try std.testing.expect(!results[0].success);
+    // DuplicateKey is ordinal 4 in ErrorCode; +1 = 5. Don't hardcode the
+    // exact value here — enum ordinals change. Just assert nonzero.
+    try std.testing.expect(results[0].error_code != 0);
 }
 
 test "U-M baseline: toml.parse rejects all U-M fixtures" {
