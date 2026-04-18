@@ -545,6 +545,31 @@ test "validate document - null byte" {
     try std.testing.expectEqual(@as(u8, 3), results[0].error_code);
 }
 
+test "Q-2 validate document rejects grammar-invalid input" {
+    // The old validateDocument only checked UTF-8, bare CR, null bytes,
+    // and bracket depth. It silently accepted grammar errors like
+    // `a = = 1`. After Q-2 the validator routes through the real parser
+    // and must reject all inputs the real parser rejects.
+    const grammar_invalid = [_][]const u8{
+        "a = = 1\n",
+        "[unclosed\n",
+        "a = 1\na = 2\n",
+        "a = \"bad\\q\"\n",
+    };
+    var results: [grammar_invalid.len]ValidateResult = undefined;
+    validateDocuments(&grammar_invalid, &results);
+
+    for (results, 0..) |r, i| {
+        if (r.valid) {
+            std.debug.print(
+                "\nQ-2 divergence at case[{d}]: input {s} was accepted by validateDocument but rejected by toml.parse\n",
+                .{ i, grammar_invalid[i] },
+            );
+            try std.testing.expect(false);
+        }
+    }
+}
+
 test "extract keys - basic" {
     const allocator = std.testing.allocator;
     const inputs = [_][]const u8{
