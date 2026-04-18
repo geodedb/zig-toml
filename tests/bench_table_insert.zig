@@ -63,6 +63,13 @@ test "B-1 parse 10k top-level keys (baseline)" {
     try std.testing.expectEqual(KEY_COUNT, hits);
 
     std.log.warn("B-1 baseline: parse+lookup 10k keys = {d} ns", .{elapsed_ns});
+
+    // Ceiling: with hash-indexed tables and O(1) inserts, parsing 10k
+    // top-level keys in ReleaseFast should take <200ms on any reasonable
+    // x86_64 laptop. Debug is ~10x slower; skip the ceiling there.
+    if (@import("builtin").mode != .Debug) {
+        try std.testing.expect(elapsed_ns < 200 * std.time.ns_per_ms);
+    }
 }
 
 const INLINE_KEY_COUNT: usize = 1000;
