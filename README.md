@@ -142,6 +142,32 @@ var doc = try toml.parse(allocator, input, .{
 });
 ```
 
+### Parallel (Batch) API
+
+For large fan-outs -- validating many config snippets in CI, lint
+passes over a directory tree, etc. -- `toml.parallel` exposes a batch
+entrypoint that runs across worker threads from a shared
+`thread_pool`-backed pool:
+
+```zig
+const toml = @import("toml");
+var inputs: [32][]const u8 = undefined;
+for (&inputs) |*s| s.* = "key = \"value\"";
+
+var results: [32]toml.parallel.ParseResult = undefined;
+toml.parallel.parseDocuments(allocator, &inputs, &results);
+defer toml.parallel.deinitPool();
+```
+
+> **Important:** today, `parallel.parseDocuments` is a lightweight
+> byte-level *shape-checker*, not a full parser. It rejects obvious
+> structural errors (unterminated strings, basic mismatches) but will
+> accept some inputs that `toml.parse` rejects. Use it for large-fanout
+> pre-filtering; use `toml.parse` for any workload that needs a typed
+> value tree. See [docs/API.md](docs/API.md) and
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the precise current
+> semantics and the roadmap to promote this to the real parser.
+
 ## CLI Usage
 
 ### toml-test-decoder
@@ -231,7 +257,7 @@ zig build
 
 ## File Structure
 
-```
+```text
 /toml
   build.zig
   LICENSE

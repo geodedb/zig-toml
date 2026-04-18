@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Documented the `toml.parallel` subsystem in `README.md`, `docs/API.md`,
+  `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md`. The docs make the
+  current semantics explicit: `parallel.parseDocuments` is a lightweight
+  byte-level shape-checker, not a full parser, and will be promoted to
+  the real parser in a future release.
+- Real coverage-guided fuzz harness (`tests/fuzz_parse.zig`) wired into
+  `zig build test --fuzz`. The GitLab CI `fuzz` stage now exercises a
+  real target instead of a no-op.
+- Defense-in-depth recursion guards (`enterDepth` / `exitDepth`) applied
+  to every recursive-descent entrypoint in the parser.
+
 ### Fixed
 
 - `parallel.parseDocuments`/`validateDocuments`/`extractKeys`: ceiling-
@@ -14,6 +27,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is no longer silently dropped. Every `results[i]` slot is now written.
 - `docs/API.md`: corrected Library Version header from `1.0` to `0.1.0`
   to match `build.zig.zon` and this changelog.
+- Datetime parsing no longer silently substitutes `0` on malformed
+  fractional seconds or timezone offsets (e.g. `+AB:CD`); returns
+  `ErrorCode.InvalidDateTime`.
+- `DateTime.format` no longer panics on `offset_minutes = i16.minInt`.
+- `writeTaggedJson` always sorts keys, even for tables with >256 entries
+  (previously fell through to insertion order for large tables).
+
+### Changed
+
+- `toml-test-decoder` CLI uses `std.heap.smp_allocator` in release
+  builds; `DebugAllocator` is gated on `builtin.mode == .Debug` only.
+
+### Performance
+
+- Added `initCapacity` hints to nine parser-local ArrayLists (paths=8,
+  items=16, escape decoders=raw.len) eliminating the reallocation
+  ladder on the hot parse paths.
 
 ## [0.1.0] - 2026-01-24
 

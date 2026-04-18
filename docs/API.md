@@ -532,6 +532,75 @@ Default limits can be configured via ParseOptions:
 
 Exceeding limits returns `ErrorCode.LimitExceeded`.
 
+## Parallel (Batch) API
+
+The `toml.parallel` submodule provides a batch-oriented entrypoint for
+fan-out workloads (e.g. validating many config snippets in CI, lint
+passes over a directory tree). It is NOT a parallel drop-in for
+`toml.parse` -- the scope and semantics are intentionally smaller.
+
+### What it does today (honest scope)
+
+`parallel.parseDocuments(allocator, inputs, results)` runs a lightweight
+byte-level shape checker across `inputs` in parallel chunks using the
+`thread_pool` dependency. Each input produces a `ParseResult` with:
+
+- `success: bool` -- true iff the shape-checker saw no obvious error.
+- `error_code: u8` -- non-zero on shape errors (e.g. unterminated string).
+- `error_line`, `error_column` -- 1-based diagnostic position on error.
+- `key_count: usize` -- approximate top-level key count.
+
+`parallel.validateDocuments(inputs, results)` runs a UTF-8 + bracket +
+control-byte validator (also in parallel).
+
+`parallel.extractKeys(allocator, inputs, results)` returns top-level key
+names as a comma-separated string per input.
+
+### What it does NOT do
+
+**`parseDocuments` is a fast shape-check, not a full parser.** It does
+*not* produce a `Document`, does *not* decode values, does *not* enforce
+the full TOML v1.0/v1.1 grammar (e.g. duplicate-key detection,
+array-of-tables semantics, or inline-table closure rules), and will
+accept inputs that `toml.parse` rejects. Use it for rejecting
+obviously-broken inputs at scale or pre-filtering; use `toml.parse` for
+any workload that needs a typed value tree.
+
+A future release (tracked as `U-A` in the gap analysis) will replace
+the shape-checker with the real parser under the same API. Until then,
+the signature is stable but the semantics are narrower than the name
+suggests.
+
+### Thresholds
+
+The parallel entry points fall back to sequential processing below
+small-batch thresholds:
+
+| Operation          | Threshold    | Sequential Below |
+|--------------------|--------------|------------------|
+| `parseDocuments`   | 4 documents  | Yes              |
+| `validateDocuments`| 8 documents  | Yes              |
+| `extractKeys`      | 8 documents  | Yes              |
+
+Chunking uses ceiling division, so every input is processed exactly
+once regardless of `inputs.len` relative to the internal `MAX_CHUNKS`
+cap. Remember to call `parallel.deinitPool()` during shutdown to free
+the shared thread pool.
+
+### Example
+
+```zig
+const toml = @import("toml");
+var inputs: [16][]const u8 = undefined;
+for (&inputs) |*s| s.* = "key = \"value\"";
+
+var results: [16]toml.parallel.ParseResult = undefined;
+toml.parallel.parseDocuments(allocator, &inputs, &results);
+defer toml.parallel.deinitPool();
+
+for (results) |r| std.debug.assert(r.success);
+```
+
 ---
 
 API Reference for zigtoml TOML Parser.

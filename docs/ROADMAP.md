@@ -56,11 +56,32 @@ Major version with streaming support:
 | [#15](https://gitlab.com/devnw/zig/toml/-/issues/15) | Event-based parsing API (SAX-style) | Low |
 | [#19](https://gitlab.com/devnw/zig/toml/-/issues/19) | Error recovery and partial parsing | Low |
 
+### Parallel (Batch) Subsystem
+
+`toml.parallel` currently exposes a batch shape-checker
+(`parseDocuments`), validator (`validateDocuments`), and top-level key
+extractor (`extractKeys`). These run in parallel chunks over a shared
+`thread_pool`-backed worker pool and are intended for large fan-out
+pre-filtering, not as a drop-in replacement for `toml.parse`.
+
+Planned work (tracked as `U-A` in the gap analysis):
+
+- Replace the `parallel.parseDocument` shape-checker with a real
+  invocation of `toml.parse`, returning a proper `Document` per input.
+- Extend `validateDocuments` to use the strict grammar rather than the
+  byte-level scanner.
+- Document determinism guarantees across thread counts.
+
+Until that work lands, the "Parallel Subsystem" docs in
+[ARCHITECTURE.md](ARCHITECTURE.md) and [API.md](API.md) spell out the
+current, narrower semantics.
+
 ## Contributing
 
 Contributions are welcome! See the [Contributing Guide](CONTRIBUTING.md) for details.
 
 When picking up an issue:
+
 1. Check the milestone to understand priority
 2. Comment on the issue to claim it
 3. Follow the acceptance criteria in the issue description

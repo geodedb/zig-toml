@@ -10,7 +10,7 @@ The zigtoml library is a fully compliant TOML v1.0.0/v1.1.0 parser implemented i
 
 ## Architecture Diagram
 
-```
+```text
                                     ┌─────────────────┐
                                     │   User Code     │
                                     └────────┬────────┘
@@ -64,12 +64,14 @@ The zigtoml library is a fully compliant TOML v1.0.0/v1.1.0 parser implemented i
 The public interface layer that users interact with.
 
 **Responsibilities:**
+
 - Expose parse functions with clean error handling
 - Re-export public types (Value, Document, ParseOptions, etc.)
 - Provide the tagged JSON output function
 - Hide internal implementation details
 
 **Key Design Decisions:**
+
 - Single entry point for parsing operations
 - Two parse variants: one returning errors, one returning results
 - All internal modules accessible only through re-exports
@@ -79,6 +81,7 @@ The public interface layer that users interact with.
 Tokenizes raw TOML input into a stream of tokens.
 
 **Responsibilities:**
+
 - Convert byte stream into typed tokens
 - Handle whitespace and comments
 - Recognize all TOML token types (strings, numbers, brackets, etc.)
@@ -104,6 +107,7 @@ The lexer is stateless between tokens. It does not maintain context about table 
 Builds the value tree from the token stream.
 
 **Responsibilities:**
+
 - Parse document structure (tables, arrays of tables, key-value pairs)
 - Build the Document and Value tree
 - Handle dotted keys and table paths
@@ -116,7 +120,7 @@ Builds the value tree from the token stream.
 
 The parser uses a recursive descent approach:
 
-```
+```text
 Document := (KeyValue | TableHeader | ArrayTableHeader | Comment | Newline)*
 
 TableHeader := '[' KeyPath ']'
@@ -134,6 +138,7 @@ InlineTable := '{' (KeyValue (',' KeyValue)*)? '}'
 **Table Resolution:**
 
 When encountering table headers, the parser:
+
 1. Parses the key path
 2. Navigates/creates intermediate tables
 3. Validates against existing definitions
@@ -174,6 +179,7 @@ Value (tagged union)
 Provides structured error types with source location.
 
 **Components:**
+
 - `ErrorCode`: Enumeration of all error types
 - `ParseError`: Struct with code, position, and message
 - `Position`: Tracks byte_index, line, column
@@ -193,6 +199,7 @@ Provides structured error types with source location.
 Serializes parsed documents to toml-test format.
 
 **Tagged JSON Format:**
+
 ```json
 {
   "key": {"type": "string", "value": "text"},
@@ -201,6 +208,7 @@ Serializes parsed documents to toml-test format.
 ```
 
 **Key Features:**
+
 - Deterministic output (keys sorted lexicographically)
 - Proper JSON string escaping
 - Float formatting with decimal points
@@ -212,7 +220,7 @@ Serializes parsed documents to toml-test format.
 
 The Document owns an ArenaAllocator that manages all parsed data:
 
-```
+```text
 Document
 └── ArenaAllocator
     ├── Root Value (Table)
@@ -222,12 +230,14 @@ Document
 ```
 
 **Benefits:**
+
 - Single `deinit()` frees everything
 - No reference counting needed
 - Fast allocation (bump allocator)
 - No memory fragmentation
 
 **Trade-offs:**
+
 - Cannot free individual values
 - Memory held until document is freed
 - Large documents hold memory longer
@@ -245,7 +255,7 @@ Strings are processed as follows:
 
 ### Parse Flow
 
-```
+```text
 Input String
     │
     ▼
@@ -263,7 +273,7 @@ Input String
 
 ### Lookup Flow
 
-```
+```text
 doc.getPath(["server", "db", "host"])
     │
     ▼
@@ -374,7 +384,7 @@ toml-test ./zig-out/bin/toml-test-decoder
 
 ## File Structure
 
-```
+```text
 src/
 ├── toml.zig           # Public API and re-exports
 ├── parser.zig         # TOML parser implementation
@@ -402,7 +412,44 @@ src/
 2. Original formatting is lost after parsing
 3. Cannot determine if table was inline vs standard after parsing
 4. No support for preserving key order across operations
+5. `toml.parallel.parseDocuments` is a lightweight shape-checker, not a
+   full parser (see Parallel Subsystem below).
+
+## Parallel Subsystem
+
+The `toml.parallel` submodule wraps a `thread_pool` dependency to
+fan out batch operations (parse/validate/extract-keys) across worker
+threads via `submitBatch` + `WaitGroup`. Its job is to pre-filter large
+fan-outs quickly, not to replace `toml.parse`.
+
+### Components
+
+- `getPool()` / `deinitPool()` -- lazy init of a process-global
+  `std.Thread.Pool`, guarded by a mutex.
+- `parseDocuments` / `validateDocuments` / `extractKeys` -- split
+  `inputs` into at most `MAX_CHUNKS` (64) chunks using ceiling
+  division so every input lands in exactly one chunk, regardless of
+  `inputs.len`.
+- Internal per-input routines (`parseDocument`, `validateDocument`,
+  `extractKeysFromDocument`) are byte-level scanners rather than full
+  parser invocations.
+
+### Important: Semantic Gap vs `toml.parse`
+
+The shape-checker inside `parseDocument` accepts many inputs that the
+real parser rejects (duplicate keys, malformed types, illegal
+array-of-tables patterns, etc.). Callers that need strict grammar
+enforcement **must** use `toml.parse`. Future work (`U-A` in the gap
+analysis) will replace the shape-checker with the real parser under
+the same public API.
+
+### Threshold Behavior
+
+Each entry point falls back to a sequential loop below a minimum batch
+size (4 for parse, 8 for validate/extract) to amortize thread-pool
+submission overhead. Above the threshold, inputs are split via ceiling
+division so the tail of a batch is never dropped.
 
 ---
 
-*Architecture Documentation for zigtoml TOML Parser*
+Architecture Documentation for zigtoml TOML Parser.
