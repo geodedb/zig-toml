@@ -36,6 +36,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `var doc = try toml.parse(...)` to `const doc = try toml.parse(...)`;
   `defer doc.deinit();` is unchanged (it is now a method on
   `*Document`). Closes Q-12.
+- `toml.parallel` is now caller-owned via a new `ParallelContext`.
+  `parseDocuments` / `validateDocuments` / `extractKeys` gain a `ctx`
+  first argument when invoked as methods:
+  `ctx.parseDocuments(&inputs, &results)`. The legacy free-function
+  forms remain as deprecated shims for 0.2.x and will be removed in
+  0.3.0.
+- `parallel.getPool` now returns `!*ThreadPool` and never `@panic`s.
+
+### Security
+
+- Close Q-4 / S-4 (CWE-416): the process-global `*ThreadPool` pointer
+  could be freed by `deinitPool` while another thread held it. The new
+  `ParallelContext` makes the pool a caller-owned resource with a
+  well-defined lifetime scope.
+- Close S-5 (CWE-248 / CWE-400): thread-pool init failure no longer
+  `@panic`s. `ParallelContext.initDefault` returns the underlying error.
+- Close S-9 (CWE-400 / CWE-789): `ParseOptions` now has `max_keys`
+  (default 100 000) and `max_values` (default 500 000). Parser returns
+  `ErrorCode.ResourceLimitExceeded` on overflow. Pathological inputs
+  such as 16 MiB of `k0=0\nk1=0\n...` or a single huge array literal
+  are now rejected in bounded memory.
 
 ### Migration from 0.1.0
 
@@ -136,6 +157,8 @@ defer doc.deinit();
 - Added `initCapacity` hints to nine parser-local ArrayLists (paths=8,
   items=16, escape decoders=raw.len) eliminating the reallocation
   ladder on the hot parse paths.
+- Close P-7: the legacy global-pool hot path is now `std.once`-guarded
+  instead of mutex-per-call. No lock on `getPool` after first init.
 
 ## [0.1.0] - 2026-01-24
 
