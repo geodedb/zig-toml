@@ -615,6 +615,23 @@ Each input produces a `ParseResult` with the following fields:
 `parallel.extractKeys(allocator, inputs, results)` similarly delegate to
 the real parser; see the Thresholds section below for batching rules.
 
+### Lifecycle: `ParallelContext`
+
+The parallel API is now caller-owned. Construct a context, use it, and
+`defer ctx.deinit()`:
+
+- `toml.parallel.ParallelContext.initDefault(allocator)` returns
+  `!*ParallelContext`. It never panics; on thread-pool init failure it
+  returns the underlying allocator/init error.
+- `ctx.deinit()` joins all workers and frees the pool.
+- Methods (`parseDocuments`, `validateDocuments`, `extractKeys`) are
+  reentrant: multiple threads may call them on the same `ctx`
+  concurrently. Do **not** call `deinit` while other threads are using
+  the context.
+- `toml.parallel.parseDocuments`/`validateDocuments`/`extractKeys`
+  free-function forms remain for 0.2.x but are deprecated. They route
+  through a process-global legacy context and will be removed in 0.3.0.
+
 ### Thresholds
 
 The parallel entry points fall back to sequential processing below
@@ -628,8 +645,11 @@ small-batch thresholds:
 
 Chunking uses ceiling division, so every input is processed exactly
 once regardless of `inputs.len` relative to the internal `MAX_CHUNKS`
-cap. Remember to call `parallel.deinitPool()` during shutdown to free
-the shared thread pool.
+cap. Construct a `ParallelContext` once per batch workload (see the
+Lifecycle subsection above) and `defer ctx.deinit()` to free the pool
+when the workload is finished. The deprecated `parallel.deinitPool()`
+shim still exists for the legacy global pool but will be removed in
+0.3.0.
 
 ### Example
 
@@ -638,10 +658,12 @@ const toml = @import("toml");
 var inputs: [16][]const u8 = undefined;
 for (&inputs) |*s| s.* = "key = \"value\"";
 
+var ctx = try toml.parallel.ParallelContext.initDefault(allocator);
+defer ctx.deinit();
+
 var results: [16]toml.parallel.ParseResult = undefined;
-toml.parallel.parseDocuments(allocator, &inputs, &results);
+ctx.parseDocuments(&inputs, &results);
 defer for (&results) |*r| if (r.doc) |d| d.deinit();
-defer toml.parallel.deinitPool();
 
 for (results) |r| std.debug.assert(r.success);
 ```
