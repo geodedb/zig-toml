@@ -713,10 +713,13 @@ pub const Parser = struct {
         var header = try self.parseInlineTableHeader(alloc);
         errdefer header.map.deinit(alloc);
 
-        var saw_trailing_comma: bool = false;
-        var saw_newline_inside: bool = false;
-        try self.parseInlineTableBody(alloc, &header, &saw_trailing_comma, &saw_newline_inside);
-        try self.validateInlineTableV10Restrictions(&header, saw_trailing_comma, saw_newline_inside);
+        // Capture the first offending token position for v1.0 restriction
+        // diagnostics so error carets point at the violating `,` / newline
+        // rather than at the opening `{` of the inline table.
+        var trailing_comma_pos: ?Position = null;
+        var newline_inside_pos: ?Position = null;
+        try self.parseInlineTableBody(alloc, &header, &trailing_comma_pos, &newline_inside_pos);
+        try self.validateInlineTableV10Restrictions(&header, trailing_comma_pos, newline_inside_pos);
 
         return Value{ .table = .{ .map = header.map, .is_inline = true, .is_closed_inline = true } };
     }
@@ -738,13 +741,13 @@ pub const Parser = struct {
         self: *Parser,
         alloc: Allocator,
         header: *InlineTableHeader,
-        saw_trailing_comma: *bool,
-        saw_newline_inside: *bool,
+        trailing_comma_pos: *?Position,
+        newline_inside_pos: *?Position,
     ) ParseValueError!void {
         while (self.current.tag != .right_brace and self.current.tag != .eof) {
             // Track newlines inside the body; v1.0 validation happens later.
             if (self.current.tag == .newline) {
-                saw_newline_inside.* = true;
+                if (newline_inside_pos.* == null) newline_inside_pos.* = self.current.pos;
                 self.current = try self.nextToken();
                 continue;
             }
@@ -814,22 +817,29 @@ pub const Parser = struct {
 
             // Skip whitespace/newlines (tracking, not rejecting).
             while (self.current.tag == .newline or self.current.tag == .comment) {
-                if (self.current.tag == .newline) saw_newline_inside.* = true;
+                if (self.current.tag == .newline and newline_inside_pos.* == null) {
+                    newline_inside_pos.* = self.current.pos;
+                }
                 self.current = try self.nextToken();
             }
 
             if (self.current.tag == .comma) {
+                // Capture comma position before consuming in case this
+                // turns out to be a trailing comma.
+                const comma_pos = self.current.pos;
                 self.current = try self.nextToken();
 
                 // Skip whitespace/newlines after comma.
                 while (self.current.tag == .newline or self.current.tag == .comment) {
-                    if (self.current.tag == .newline) saw_newline_inside.* = true;
+                    if (self.current.tag == .newline and newline_inside_pos.* == null) {
+                        newline_inside_pos.* = self.current.pos;
+                    }
                     self.current = try self.nextToken();
                 }
 
                 // Trailing comma: flag for post-body validation.
-                if (self.current.tag == .right_brace) {
-                    saw_trailing_comma.* = true;
+                if (self.current.tag == .right_brace and trailing_comma_pos.* == null) {
+                    trailing_comma_pos.* = comma_pos;
                 }
             } else if (self.current.tag != .right_brace) {
                 // No comma and not closing brace - error
@@ -848,22 +858,23 @@ pub const Parser = struct {
     fn validateInlineTableV10Restrictions(
         self: *Parser,
         header: *const InlineTableHeader,
-        saw_trailing_comma: bool,
-        saw_newline_inside: bool,
+        trailing_comma_pos: ?Position,
+        newline_inside_pos: ?Position,
     ) ParseValueError!void {
+        _ = header; // preserved in signature; may be reused for future diagnostics.
         if (self.options.version != .v1_0_0) return;
-        if (saw_trailing_comma) {
+        if (trailing_comma_pos) |pos| {
             self.parse_error = err.makeError(
                 .InlineTableTrailingCommaNotAllowed,
-                header.open_pos,
+                pos,
                 "trailing comma not allowed in inline tables in TOML v1.0",
             );
             return error.ParseFailed;
         }
-        if (saw_newline_inside) {
+        if (newline_inside_pos) |pos| {
             self.parse_error = err.makeError(
                 .InlineTableNewlineNotAllowed,
-                header.open_pos,
+                pos,
                 "newlines not allowed in inline tables in TOML v1.0",
             );
             return error.ParseFailed;
