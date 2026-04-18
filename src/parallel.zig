@@ -177,79 +177,41 @@ pub fn parseDocuments(
 }
 
 fn parseDocument(allocator: std.mem.Allocator, input: []const u8) ParseResult {
-    _ = allocator;
-
-    // Simple TOML validation - check basic structure
-    var key_count: usize = 0;
-    var line: usize = 1;
-    var column: usize = 1;
-    var in_string = false;
-    var in_multiline_string = false;
-    var i: usize = 0;
-
-    while (i < input.len) {
-        const c = input[i];
-
-        if (in_multiline_string) {
-            if (i + 2 < input.len and
-                input[i] == '"' and input[i + 1] == '"' and input[i + 2] == '"')
-            {
-                in_multiline_string = false;
-                i += 3;
-                column += 3;
-                continue;
+    // Route through the real parser. toml.parseWithError returns a
+    // tagged union (ok|err) so we don't lose diagnostic info on failure.
+    const r = toml.parseWithError(allocator, input, .{});
+    switch (r) {
+        .ok => |doc_val| {
+            // Count top-level keys in the root table.
+            var key_count: usize = 0;
+            switch (doc_val.root.*) {
+                .table => |t| key_count = t.entries.len,
+                else => {},
             }
-        } else if (in_string) {
-            if (c == '"' and (i == 0 or input[i - 1] != '\\')) {
-                in_string = false;
-            }
-        } else {
-            if (c == '"') {
-                if (i + 2 < input.len and input[i + 1] == '"' and input[i + 2] == '"') {
-                    in_multiline_string = true;
-                    i += 3;
-                    column += 3;
-                    continue;
-                }
-                in_string = true;
-            } else if (c == '=') {
-                key_count += 1;
-            } else if (c == '[') {
-                // Table header - could be [[array]] or [table]
-                if (i + 1 < input.len and input[i + 1] == '[') {
-                    // Array of tables
-                    i += 1;
-                    column += 1;
-                }
-            }
-        }
-
-        if (c == '\n') {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-        i += 1;
+            return .{
+                .success = true,
+                .error_code = 0,
+                .error_line = null,
+                .error_column = null,
+                .key_count = key_count,
+                .doc = doc_val,
+            };
+        },
+        .err => |pe| {
+            // Map ErrorCode to a nonzero u8. We use @intFromEnum + 1 so
+            // 0 stays reserved for "success". Valid ErrorCode ordinals
+            // are 0..19 today — well inside u8.
+            const code_u8: u8 = @intCast(@intFromEnum(pe.code) + 1);
+            return .{
+                .success = false,
+                .error_code = code_u8,
+                .error_line = @intCast(pe.line),
+                .error_column = @intCast(pe.column),
+                .key_count = 0,
+                .doc = null,
+            };
+        },
     }
-
-    if (in_string or in_multiline_string) {
-        return .{
-            .success = false,
-            .error_code = 1,
-            .error_line = line,
-            .error_column = column,
-            .key_count = key_count,
-        };
-    }
-
-    return .{
-        .success = true,
-        .error_code = 0,
-        .error_line = null,
-        .error_column = null,
-        .key_count = key_count,
-    };
 }
 
 // ============================================================================
