@@ -341,6 +341,42 @@ test "U-R malformed fractional seconds rejected" {
     }
 }
 
+test "Q-3 positive smoke: parse then writeTaggedJson round-trip" {
+    // Parse a small doc, emit tagged JSON, re-parse that JSON into a
+    // std.json tree, and confirm the shape matches expectations. This
+    // catches silent divergence between parser and writeTaggedJson that
+    // a .success==true-only check would miss.
+    const input =
+        \\greeting = "hi"
+        \\count = 7
+    ;
+    const doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeTaggedJson(doc, &aw.writer);
+
+    const emitted = aw.written();
+
+    // Byte-exact check: the writer is deterministic (keys sorted).
+    const expected =
+        "{\"count\":{\"type\":\"integer\",\"value\":\"7\"}," ++
+        "\"greeting\":{\"type\":\"string\",\"value\":\"hi\"}}\n";
+    try std.testing.expectEqualStrings(expected, emitted);
+
+    // Re-parse to confirm it's syntactically valid JSON -- defence against
+    // a future writer bug that emits something that merely LOOKS like JSON.
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        std.testing.allocator,
+        std.mem.trimEnd(u8, emitted, "\n"),
+        .{},
+    );
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .object);
+}
+
 test "U-H deep nesting rejected by defense-in-depth guards" {
     // Build a TOML document with >max_depth nested arrays. Every recursion
     // entrypoint (parseValue, parseArray, parseArrayContents,
