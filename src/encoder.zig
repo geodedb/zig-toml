@@ -509,6 +509,75 @@ test "encode single-level header table" {
     try std.testing.expectEqualStrings(expected, aw.written());
 }
 
+test "encode inline table" {
+    const parser_mod = @import("parser.zig");
+    const input = "point = { x = 1, y = 2 }\n";
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    try std.testing.expectEqualStrings("point = { x = 1, y = 2 }\n", aw.written());
+}
+
+test "encode inline table empty" {
+    const parser_mod = @import("parser.zig");
+    const input = "empty = {}\n";
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    try std.testing.expectEqualStrings("empty = {}\n", aw.written());
+}
+
+test "encode array-of-tables as [[header]]" {
+    const parser_mod = @import("parser.zig");
+    const input =
+        \\[[products]]
+        \\name = "Hammer"
+        \\
+        \\[[products]]
+        \\name = "Nail"
+        \\
+    ;
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    const expected =
+        "[[products]]\n" ++
+        "name = \"Hammer\"\n" ++
+        "\n" ++
+        "[[products]]\n" ++
+        "name = \"Nail\"\n";
+    try std.testing.expectEqualStrings(expected, aw.written());
+}
+
+test "encode static array of inline tables" {
+    const parser_mod = @import("parser.zig");
+    const input = "points = [{ x = 1 }, { x = 2 }]\n";
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    try std.testing.expectEqualStrings("points = [{ x = 1 }, { x = 2 }]\n", aw.written());
+}
+
 test "encode nested header table" {
     const parser_mod = @import("parser.zig");
     const input =
