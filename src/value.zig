@@ -193,6 +193,64 @@ pub const Value = union(ValueTag) {
             else => null,
         };
     }
+
+    /// Return the integer payload if this value is tagged `.integer`,
+    /// otherwise `null`. Does not perform type coercion (a `.float` of
+    /// 1.0 returns `null`, not `1`). No panic on wrong tag.
+    pub fn asI64(self: *const Value) ?i64 {
+        return switch (self.*) {
+            .integer => |i| i,
+            else => null,
+        };
+    }
+
+    /// Return the float payload if this value is tagged `.float`,
+    /// otherwise `null`. No panic on wrong tag.
+    pub fn asF64(self: *const Value) ?f64 {
+        return switch (self.*) {
+            .float => |f| f,
+            else => null,
+        };
+    }
+
+    /// Return the boolean payload if this value is tagged `.bool`,
+    /// otherwise `null`.
+    pub fn asBool(self: *const Value) ?bool {
+        return switch (self.*) {
+            .bool => |b| b,
+            else => null,
+        };
+    }
+
+    /// Return the string slice if this value is tagged `.string`,
+    /// otherwise `null`. The returned slice is owned by whatever
+    /// allocator built the Value (typically the document arena).
+    pub fn asString(self: *const Value) ?[]const u8 {
+        return switch (self.*) {
+            .string => |s| s,
+            else => null,
+        };
+    }
+
+    /// Return a pointer to the Array struct if this value is tagged
+    /// `.array`, otherwise `null`. The pointer is valid for the
+    /// lifetime of the surrounding Value.
+    pub fn asArray(self: *Value) ?*Array {
+        return switch (self.*) {
+            .array => &self.array,
+            else => null,
+        };
+    }
+
+    /// Return a pointer to the Table struct if this value is tagged
+    /// `.table`, otherwise `null`. The pointer is valid for the
+    /// lifetime of the surrounding Value.
+    pub fn asTable(self: *Value) ?*Table {
+        return switch (self.*) {
+            .table => &self.table,
+            else => null,
+        };
+    }
 };
 
 /// Parsed TOML document with memory ownership.
@@ -478,4 +536,58 @@ test "C-4 tableContains is true after insert, false for missing" {
 
     try std.testing.expect(tableContains(root, "present"));
     try std.testing.expect(!tableContains(root, "absent"));
+}
+
+test "U-V asI64 returns value for integer, null for other tags" {
+    const v_int: Value = .{ .integer = 42 };
+    try std.testing.expectEqual(@as(?i64, 42), v_int.asI64());
+
+    const v_str: Value = .{ .string = "hello" };
+    try std.testing.expectEqual(@as(?i64, null), v_str.asI64());
+
+    const v_bool: Value = .{ .bool = true };
+    try std.testing.expectEqual(@as(?i64, null), v_bool.asI64());
+}
+
+test "U-V asF64 returns value for float, null for other tags" {
+    const v_flt: Value = .{ .float = 3.14 };
+    try std.testing.expectEqual(@as(?f64, 3.14), v_flt.asF64());
+
+    const v_int: Value = .{ .integer = 42 };
+    try std.testing.expectEqual(@as(?f64, null), v_int.asF64());
+}
+
+test "U-V asBool returns value for bool, null for other tags" {
+    const v_t: Value = .{ .bool = true };
+    try std.testing.expectEqual(@as(?bool, true), v_t.asBool());
+
+    const v_f: Value = .{ .bool = false };
+    try std.testing.expectEqual(@as(?bool, false), v_f.asBool());
+
+    const v_int: Value = .{ .integer = 0 };
+    try std.testing.expectEqual(@as(?bool, null), v_int.asBool());
+}
+
+test "U-V asString returns slice for string, null for other tags" {
+    const v_str: Value = .{ .string = "hello" };
+    try std.testing.expectEqualStrings("hello", v_str.asString().?);
+
+    const v_int: Value = .{ .integer = 0 };
+    try std.testing.expectEqual(@as(?[]const u8, null), v_int.asString());
+}
+
+test "U-V asArray returns pointer for array, null for other tags" {
+    var v_arr: Value = .{ .array = .{} };
+    try std.testing.expect(v_arr.asArray() != null);
+
+    var v_int: Value = .{ .integer = 0 };
+    try std.testing.expect(v_int.asArray() == null);
+}
+
+test "U-V asTable returns pointer for table, null for other tags" {
+    var v_tbl: Value = .{ .table = .{} };
+    try std.testing.expect(v_tbl.asTable() != null);
+
+    var v_int: Value = .{ .integer = 0 };
+    try std.testing.expect(v_int.asTable() == null);
 }
