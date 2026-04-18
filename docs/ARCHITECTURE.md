@@ -102,19 +102,37 @@ Tokenizes raw TOML input into a stream of tokens.
 **Stateless Design:**
 The lexer is stateless between tokens. It does not maintain context about table headers or value positions - this is handled by the parser.
 
-### 3. Parser (parser.zig)
+### 3. Parser (parser.zig + parser/)
 
-Builds the value tree from the token stream.
+Builds the value tree from the token stream. The parser is split into
+a top-level dispatch file (`src/parser.zig`) and three leaf submodules
+under `src/parser/` — `datetime.zig`, `number.zig`, and `string.zig` —
+each handling a single value family. The dispatch file holds the
+recursive-descent loop (`parseDocument` / `parseValue` / `parseArray`
+/ `parseInlineTable` / `parseKeyValue`) and all table-path resolution;
+the submodules are purely functional decoders that take a `*Parser`
+plus the raw token slice and return the decoded value or an error.
 
-**Responsibilities:**
+**Responsibilities (parser.zig):**
 
 - Parse document structure (tables, arrays of tables, key-value pairs)
 - Build the Document and Value tree
 - Handle dotted keys and table paths
 - Enforce TOML semantic rules (no duplicate keys, table redefinition, etc.)
 - Version-gated features (v1.0 vs v1.1 differences)
-- Decode string escape sequences
-- Parse numbers and datetime values
+- Orchestrate the inline-table pipeline
+  (`parseInlineTableHeader` → `parseInlineTableBody` →
+  `validateInlineTableV10Restrictions`)
+
+**Responsibilities (parser/ submodules):**
+
+- `parser/datetime.zig` — RFC 3339 offset/local date/time parsing
+  with shared `parseDateParts` / `parseTimeParts` / `parseOffset`
+  helpers and leap-year / calendar / range validators
+- `parser/number.zig` — integer + float parsing and format validation
+  via a flat state machine (`classifyFloatByte` + `stepFloat`)
+- `parser/string.zig` — basic / literal / multi-line string decoders
+  and escape-sequence handling
 
 **Parsing Strategy:**
 
@@ -393,14 +411,31 @@ toml-test ./zig-out/bin/toml-test-decoder
 ```text
 src/
 ├── toml.zig           # Public API and re-exports
-├── parser.zig         # TOML parser implementation
+├── parser.zig         # Dispatch: parseDocument, parseValue, parseArray,
+│                      # parseInlineTable (header/body/validation),
+│                      # key-value, table-path resolution
+├── parser/
+│   ├── datetime.zig   # RFC 3339 offset/local date/time parsers with
+│   │                  # shared parseDateParts / parseTimeParts /
+│   │                  # parseOffset helpers and leap-year / calendar /
+│   │                  # range validators
+│   ├── number.zig     # Integer + float parsers; flat state-machine
+│   │                  # validator for float format (classifyFloatByte +
+│   │                  # stepFloat)
+│   └── string.zig     # Basic / literal / multi-line string decoders
+│                      # plus escape-sequence handling
 ├── lexer.zig          # Tokenizer
 ├── value.zig          # Value types and Document
 ├── error.zig          # Error types
 ├── json_tagged.zig    # Tagged JSON emitter
+├── parallel.zig       # ParallelContext: fan-out parse/validate/extract
 └── bin/
     └── toml_test_decoder.zig  # CLI for toml-test
 ```
+
+The `parser/` submodules are pure delegates: `src/parser.zig`
+re-exposes them via thin wrappers that pin the `ParseValueError` shape,
+so the public parser surface is unchanged by the split.
 
 ## Future Considerations
 
