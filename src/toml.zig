@@ -306,6 +306,8 @@ test "special floats" {
 test "U-R malformed timezone hours rejected" {
     // Lexer accepts the datetime token shape; parser must reject the
     // non-digit bytes in the TZ offset instead of silently using 0.
+    // Q-3: assert structurally -- error code, line, column must be populated
+    // so users can surface a diagnostic, not just "something failed".
     const input = "dt = 2024-01-15T10:30:00+AB:CD\n";
     const result = parseWithError(std.testing.allocator, input, .{});
     switch (result) {
@@ -313,7 +315,11 @@ test "U-R malformed timezone hours rejected" {
             doc.deinit();
             try std.testing.expect(false);
         },
-        .err => {}, // any parse error is acceptable; 0-silent-accept is not
+        .err => |e| {
+            try std.testing.expect(e.line >= 1);
+            try std.testing.expect(e.column >= 1);
+            try std.testing.expect(e.message.len > 0);
+        },
     }
 }
 
