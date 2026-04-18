@@ -21,6 +21,142 @@ pub const SchemaError = error{
     OutOfMemory,
 };
 
+/// A field in an `object` schema.
+pub const FieldSchema = struct {
+    name: []const u8,
+    schema: *const SchemaNode,
+    required: bool = true,
+};
+
+/// Validation mode for unknown object fields.
+pub const UnknownFieldPolicy = enum { strict, lax };
+
+/// Constraint set for string values.
+pub const StringOpts = struct {
+    min_len: ?usize = null,
+    max_len: ?usize = null,
+};
+
+/// Constraint set for integer values.
+pub const IntOpts = struct {
+    min: ?i64 = null,
+    max: ?i64 = null,
+};
+
+/// Constraint set for float values.
+pub const FloatOpts = struct {
+    min: ?f64 = null,
+    max: ?f64 = null,
+    allow_nan: bool = true,
+    allow_inf: bool = true,
+};
+
+/// Constraint set for array values.
+pub const ArrayOpts = struct {
+    min_len: ?usize = null,
+    max_len: ?usize = null,
+};
+
+/// Declarative schema node. Each variant describes the expected value and
+/// optional constraints. Heap-allocation is caller-controlled — constructors
+/// take slices into memory the caller already owns.
+///
+/// Construction: Zig forbids a declaration on a union type from sharing a
+/// name with a tag field, so we cannot write `SchemaNode.string(...)`
+/// directly. Use the `SchemaNode.N` namespace (`N` for "node") instead:
+///
+/// ```zig
+/// const node = SchemaNode.N.string(.{ .min_len = 1 });
+/// const int  = SchemaNode.N.integer(.{ .min = 0, .max = 65535 });
+/// ```
+///
+/// Or build literals directly: `SchemaNode{ .string = .{} }`.
+pub const SchemaNode = union(Kind) {
+    string: StringOpts,
+    integer: IntOpts,
+    float: FloatOpts,
+    boolean: void,
+    datetime: void,
+    datetime_local: void,
+    date_local: void,
+    time_local: void,
+    array: struct {
+        element: *const SchemaNode,
+        opts: ArrayOpts = .{},
+    },
+    object: struct {
+        fields: []const FieldSchema,
+        unknown: UnknownFieldPolicy = .strict,
+    },
+    one_of: []const SchemaNode,
+
+    pub const Kind = enum {
+        string,
+        integer,
+        float,
+        boolean,
+        datetime,
+        datetime_local,
+        date_local,
+        time_local,
+        array,
+        object,
+        one_of,
+    };
+
+    /// Constructor namespace. Grouped under `N` because Zig does not
+    /// allow a decl to share a name with a union tag field.
+    pub const N = struct {
+        pub fn string(opts: StringOpts) SchemaNode {
+            return .{ .string = opts };
+        }
+
+        pub fn integer(opts: IntOpts) SchemaNode {
+            return .{ .integer = opts };
+        }
+
+        pub fn float(opts: FloatOpts) SchemaNode {
+            return .{ .float = opts };
+        }
+
+        pub fn boolean() SchemaNode {
+            return .{ .boolean = {} };
+        }
+
+        pub fn datetime() SchemaNode {
+            return .{ .datetime = {} };
+        }
+
+        pub fn datetimeLocal() SchemaNode {
+            return .{ .datetime_local = {} };
+        }
+
+        pub fn dateLocal() SchemaNode {
+            return .{ .date_local = {} };
+        }
+
+        pub fn timeLocal() SchemaNode {
+            return .{ .time_local = {} };
+        }
+
+        pub fn array(element: *const SchemaNode, opts: ArrayOpts) SchemaNode {
+            return .{ .array = .{ .element = element, .opts = opts } };
+        }
+
+        pub fn object(fields: []const FieldSchema, unknown: UnknownFieldPolicy) SchemaNode {
+            return .{ .object = .{ .fields = fields, .unknown = unknown } };
+        }
+
+        pub fn oneOf(variants: []const SchemaNode) SchemaNode {
+            return .{ .one_of = variants };
+        }
+    };
+
+    pub fn kind(self: SchemaNode) Kind {
+        return @as(Kind, self);
+    }
+};
+
 /// Enumerated reason a schema violation was recorded.
 pub const DiagnosticCode = enum {
     type_mismatch,
@@ -109,6 +245,18 @@ test "Diagnostic stores path and kind information" {
     try std.testing.expectEqual(ValueTag.integer, d.expected.?);
     try std.testing.expectEqual(ValueTag.string, d.got.?);
     try std.testing.expectEqual(DiagnosticCode.type_mismatch, d.code);
+}
+
+test "SchemaNode.N.string builds a string node" {
+    const node = SchemaNode.N.string(.{});
+    try std.testing.expectEqual(SchemaNode.Kind.string, node.kind());
+}
+
+test "SchemaNode.N.integer honors min and max" {
+    const node = SchemaNode.N.integer(.{ .min = 1, .max = 65535 });
+    try std.testing.expectEqual(SchemaNode.Kind.integer, node.kind());
+    try std.testing.expectEqual(@as(i64, 1), node.integer.min.?);
+    try std.testing.expectEqual(@as(i64, 65535), node.integer.max.?);
 }
 
 test "DiagnosticList owns path and message copies" {
