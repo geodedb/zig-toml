@@ -119,8 +119,34 @@ fn writeBasicString(s: []const u8, writer: anytype) !void {
 fn writeLeafValue(v: *const Value, writer: anytype) !void {
     switch (v.*) {
         .integer => |n| try writer.print("{d}", .{n}),
+        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+        .string => |s| try writeBasicString(s, writer),
+        .float => |f| try writeFloat(f, writer),
         else => return error.Unimplemented,
     }
+}
+
+fn writeFloat(f: f64, writer: anytype) !void {
+    if (std.math.isNan(f)) {
+        try writer.writeAll("nan");
+        return;
+    }
+    if (std.math.isInf(f)) {
+        try writer.writeAll(if (f < 0) "-inf" else "inf");
+        return;
+    }
+    // Format with default precision, then ensure a decimal indicator exists.
+    var buf: [64]u8 = undefined;
+    const formatted = try std.fmt.bufPrint(&buf, "{d}", .{f});
+    try writer.writeAll(formatted);
+    var has_point = false;
+    for (formatted) |c| {
+        if (c == '.' or c == 'e' or c == 'E') {
+            has_point = true;
+            break;
+        }
+    }
+    if (!has_point) try writer.writeAll(".0");
 }
 
 test "encode empty document produces empty output" {
@@ -149,4 +175,76 @@ test "encode single integer key-value" {
 
     try encode(doc, &aw.writer, .{});
     try std.testing.expectEqualStrings("a = 42\n", aw.written());
+}
+
+test "encode boolean values" {
+    const parser_mod = @import("parser.zig");
+    const input =
+        \\t = true
+        \\f = false
+        \\
+    ;
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    try std.testing.expectEqualStrings("f = false\nt = true\n", aw.written());
+}
+
+test "encode string values with escapes" {
+    const parser_mod = @import("parser.zig");
+    const input =
+        \\plain = "hello"
+        \\tab = "a\tb"
+        \\newline = "a\nb"
+        \\quote = "say \"hi\""
+        \\backslash = "a\\b"
+        \\
+    ;
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    const expected =
+        "backslash = \"a\\\\b\"\n" ++
+        "newline = \"a\\nb\"\n" ++
+        "plain = \"hello\"\n" ++
+        "quote = \"say \\\"hi\\\"\"\n" ++
+        "tab = \"a\\tb\"\n";
+    try std.testing.expectEqualStrings(expected, aw.written());
+}
+
+test "encode float values including special forms" {
+    const parser_mod = @import("parser.zig");
+    const input =
+        \\pi = 3.14
+        \\whole = 1.0
+        \\positive_inf = inf
+        \\negative_inf = -inf
+        \\not_a_number = nan
+        \\
+    ;
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    const expected =
+        "negative_inf = -inf\n" ++
+        "not_a_number = nan\n" ++
+        "pi = 3.14\n" ++
+        "positive_inf = inf\n" ++
+        "whole = 1.0\n";
+    try std.testing.expectEqualStrings(expected, aw.written());
 }
