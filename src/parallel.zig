@@ -596,6 +596,54 @@ test "extract keys - empty document" {
     try std.testing.expectEqual(@as(usize, 0), results[0].count);
 }
 
+test "GAP-0001 extractKeys uses real parser — inline tables + quoted keys" {
+    // The old extractor split on `=` per-line and returned keys like
+    // "pt" for `pt = { x = 1, y = 2 }` (correct) but also wrongly
+    // returned "x" and "y" as top-level keys because it did not
+    // recognize inline tables. It also mishandled quoted keys
+    // containing `=` and dotted keys.
+    const allocator = std.testing.allocator;
+    const inputs = [_][]const u8{
+        // Inline table: only `pt` is top-level. Old extractor returned
+        // pt, x, y.
+        \\pt = { x = 1, y = 2 }
+        \\name = "zig"
+        ,
+        // Quoted key with `=`: the key is literally `a=b`. Old extractor
+        // split at the first `=` and called it `"a`.
+        "\"a=b\" = 42\n",
+        // Dotted key: root table has exactly one top-level key, `a`.
+        // Old extractor returned `a.b.c`.
+        "a.b.c = 1\n",
+    };
+    var results: [inputs.len]KeyExtractResult = undefined;
+    extractKeys(allocator, &inputs, &results);
+    defer for (&results) |*r| if (r.keys) |k| allocator.free(k);
+
+    // Case 0: inline table + sibling key.
+    try std.testing.expect(results[0].success);
+    try std.testing.expectEqual(@as(usize, 2), results[0].count);
+    if (results[0].keys) |k| {
+        // Keys are joined by ',' in insertion order. Root entries are
+        // `pt` and `name`.
+        try std.testing.expectEqualStrings("pt,name", k);
+    } else try std.testing.expect(false);
+
+    // Case 1: quoted key containing `=`.
+    try std.testing.expect(results[1].success);
+    try std.testing.expectEqual(@as(usize, 1), results[1].count);
+    if (results[1].keys) |k| {
+        try std.testing.expectEqualStrings("a=b", k);
+    } else try std.testing.expect(false);
+
+    // Case 2: dotted key — only `a` is top-level.
+    try std.testing.expect(results[2].success);
+    try std.testing.expectEqual(@as(usize, 1), results[2].count);
+    if (results[2].keys) |k| {
+        try std.testing.expectEqualStrings("a", k);
+    } else try std.testing.expect(false);
+}
+
 test "parallel parse - large batch" {
     const allocator = std.testing.allocator;
     var inputs: [16][]const u8 = undefined;
