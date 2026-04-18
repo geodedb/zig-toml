@@ -48,6 +48,9 @@
 
 const std = @import("std");
 const tp = @import("thread_pool");
+const toml = @import("toml.zig");
+const Document = toml.Document;
+const ErrorCode = toml.ErrorCode;
 
 // ============================================================================
 // Global Thread Pool
@@ -79,18 +82,27 @@ pub fn deinitPool() void {
 // Parse Result Types
 // ============================================================================
 
-/// Result of TOML document parsing
+/// Result of TOML document parsing.
+///
+/// Ownership: when `success` is true, `doc` holds the parsed Document.
+/// The caller MUST call `result.doc.?.deinit()` (or iterate the result
+/// array and deinit every non-null doc) to free the per-document arena.
+/// When `success` is false, `doc` is null and `error_code` / `error_line`
+/// / `error_column` describe the failure.
 pub const ParseResult = struct {
-    /// Whether parsing succeeded
-    success: bool,
-    /// Error code (0 = success)
-    error_code: u8,
-    /// Error line (if failed)
-    error_line: ?usize,
-    /// Error column (if failed)
-    error_column: ?usize,
-    /// Number of top-level keys found
-    key_count: usize,
+    /// Whether parsing succeeded.
+    success: bool = false,
+    /// Error code mapped from `toml.ErrorCode` (0 = success, otherwise
+    /// `@intFromEnum(toml.ErrorCode) + 1` so 0 is reserved for success).
+    error_code: u8 = 0,
+    /// 1-based error line (if failed).
+    error_line: ?usize = null,
+    /// 1-based error column (if failed).
+    error_column: ?usize = null,
+    /// Number of top-level keys in the root table when `success` is true.
+    key_count: usize = 0,
+    /// Parsed document when `success` is true. Caller owns — must deinit.
+    doc: ?Document = null,
 };
 
 // ============================================================================
@@ -700,7 +712,6 @@ test "U-M baseline: toml.parse rejects all U-M fixtures" {
     // Pairing baseline: confirm the REAL parser rejects every input the
     // shape-checker accepted above. If this test starts passing
     // together with the xfail ones above, U-A has landed correctly.
-    const toml = @import("toml.zig");
     const fixtures = [_][]const u8{
         "a = = 1\n",
         "[unclosed table\n",
