@@ -7,13 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-18
+
+### Changed (BREAKING)
+
+- `parallel.ParseResult` gained a `doc: ?Document` field. Callers MUST
+  drain any non-null `doc` with `result.doc.?.deinit()` (or iterate and
+  deinit each result in a loop) to free the per-document arena. All
+  existing fields default-init, so struct initializer code that omits
+  `doc` continues to compile.
+- `parallel.parseDocuments`, `parallel.validateDocuments`, and
+  `parallel.extractKeys` now delegate to the real `toml.parse` parser.
+  Previously they were implemented as a byte-level "shape-checker" that
+  silently accepted grammar-invalid inputs like `a = = 1`, unclosed
+  table headers, duplicate keys, and mishandled inline tables / quoted
+  keys / dotted keys. The new behavior is that the parallel path
+  produces the same accept/reject decision as the serial path for every
+  input.
+- `toml-test-decoder` CLI uses `std.heap.smp_allocator` in release
+  builds; `DebugAllocator` is gated on `builtin.mode == .Debug` only.
+
+### Migration from 0.1.0
+
+Before:
+
+```zig
+var results: [N]toml.parallel.ParseResult = undefined;
+toml.parallel.parseDocuments(alloc, &inputs, &results);
+for (results) |r| { _ = r.success; }
+```
+
+After:
+
+```zig
+var results: [N]toml.parallel.ParseResult = undefined;
+toml.parallel.parseDocuments(alloc, &inputs, &results);
+defer for (&results) |*r| if (r.doc) |*d| d.deinit();
+for (results) |r| {
+    if (r.success) {
+        // r.doc.? is the parsed Document — read values directly.
+    } else {
+        // r.error_code, r.error_line, r.error_column describe the failure.
+    }
+}
+```
+
 ### Added
 
-- Documented the `toml.parallel` subsystem in `README.md`, `docs/API.md`,
-  `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md`. The docs make the
-  current semantics explicit: `parallel.parseDocuments` is a lightweight
-  byte-level shape-checker, not a full parser, and will be promoted to
-  the real parser in a future release.
 - Real coverage-guided fuzz harness (`tests/fuzz_parse.zig`) wired into
   `zig build test --fuzz`. The GitLab CI `fuzz` stage now exercises a
   real target instead of a no-op.
@@ -22,6 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GAP-0001 / Q-1: `parallel.parseDocuments` no longer diverges from
+  `toml.parse` on accept/reject decisions.
+- Q-2: `parallel.validateDocuments` now validates against the full TOML
+  grammar, not just UTF-8 / bare CR / null bytes / bracket balance.
+- P-6: eliminated the toy state machine at `parallel.zig:169-239`.
+- S-1 (CWE-345/436): false-oracle parser removed; parallel path uses
+  the real recursive-descent parser. (See confidential issue #41.)
+- S-2 (CWE-697): `in_string` escape handling bug at the old
+  `parallel.zig:189` no longer exists — the byte-level scanner was
+  deleted.
+- S-3 (CWE-436): `validateDocument` is no longer a false oracle. (See
+  confidential issue #43.)
 - `parallel.parseDocuments`/`validateDocuments`/`extractKeys`: ceiling-
   divide `chunk_size` so the tail of large batches (inputs > MAX_CHUNKS)
   is no longer silently dropped. Every `results[i]` slot is now written.
@@ -34,10 +86,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `writeTaggedJson` always sorts keys, even for tables with >256 entries
   (previously fell through to insertion order for large tables).
 
-### Changed
+### Removed
 
-- `toml-test-decoder` CLI uses `std.heap.smp_allocator` in release
-  builds; `DebugAllocator` is gated on `builtin.mode == .Debug` only.
+- Shadow `parseDocument` char-scanner (`parallel.zig:169-243`,
+  75 lines).
+- Shadow `validateDocument` byte-checker (`parallel.zig:319-357`,
+  38 lines).
+- Shadow `extractKeysFromDocument` line-splitter
+  (`parallel.zig:438-484`, 47 lines).
 
 ### Performance
 
@@ -87,5 +143,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable depth and size limits to prevent resource exhaustion
 - No panics on malformed input
 
-[Unreleased]: https://gitlab.com/devnw/zig/toml/-/compare/v0.1.0...HEAD
+[Unreleased]: https://gitlab.com/devnw/zig/toml/-/compare/v0.2.0...HEAD
+[0.2.0]: https://gitlab.com/devnw/zig/toml/-/compare/v0.1.0...v0.2.0
 [0.1.0]: https://gitlab.com/devnw/zig/toml/-/releases/v0.1.0
