@@ -389,14 +389,27 @@ pub const Parser = struct {
 
     const ParseValueError = error{ ParseFailed, OutOfMemory };
 
-    fn parseValue(self: *Parser, alloc: Allocator) ParseValueError!*Value {
+    /// Increment the recursion depth counter and bail if the configured
+    /// max_depth is exceeded. Every recursive descent entrypoint
+    /// (parseValue, parseArray, parseInlineTable, parseArrayContents,
+    /// parseNestedArrayFromDoubleBracket) MUST call this with a matching
+    /// `exitDepth()` in a defer to guarantee resource-exhaustion guards
+    /// cannot be bypassed by any alternate call path.
+    fn enterDepth(self: *Parser) !void {
         self.depth += 1;
-        defer self.depth -= 1;
-
         if (self.depth > self.options.max_depth) {
             self.parse_error = err.makeError(.LimitExceeded, self.current.pos, "max nesting depth exceeded");
             return error.ParseFailed;
         }
+    }
+
+    fn exitDepth(self: *Parser) void {
+        self.depth -= 1;
+    }
+
+    fn parseValue(self: *Parser, alloc: Allocator) ParseValueError!*Value {
+        try self.enterDepth();
+        defer self.exitDepth();
 
         const result = try alloc.create(Value);
 
@@ -469,6 +482,13 @@ pub const Parser = struct {
     }
 
     fn parseArray(self: *Parser, alloc: Allocator) ParseValueError!Value {
+        // Defense-in-depth: parseArray is normally called via parseValue
+        // (which already guards), but any alternate caller (e.g. future
+        // direct invocation) would bypass the recursion cap. Guard here
+        // too so the protection holds regardless of call path.
+        try self.enterDepth();
+        defer self.exitDepth();
+
         self.current = try self.nextToken(); // consume [
 
         // 16-slot initial capacity covers most literal arrays without
@@ -520,15 +540,10 @@ pub const Parser = struct {
         // We saw [[ which the lexer tokenized as double_bracket_open
         // In value context, this is a nested array: [ [ ... ] ... ]
         // We treat the [[ as the start of outer array + start of inner array
+        try self.enterDepth();
+        defer self.exitDepth();
+
         self.current = try self.nextToken(); // consume [[
-
-        self.depth += 1;
-        defer self.depth -= 1;
-
-        if (self.depth > self.options.max_depth) {
-            self.parse_error = err.makeError(.LimitExceeded, self.current.pos, "max nesting depth exceeded");
-            return error.ParseFailed;
-        }
 
         var outer_items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
 
@@ -582,6 +597,11 @@ pub const Parser = struct {
     }
 
     fn parseArrayContents(self: *Parser, alloc: Allocator) ParseValueError!Value {
+        // Defense-in-depth: guard here too because this function can be
+        // reached from parseNestedArrayFromDoubleBracket's inner call.
+        try self.enterDepth();
+        defer self.exitDepth();
+
         // Parse array contents after the opening [ has been consumed.
         var items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
 
@@ -626,6 +646,10 @@ pub const Parser = struct {
     }
 
     fn parseInlineTable(self: *Parser, alloc: Allocator) ParseValueError!Value {
+        // Defense-in-depth: inline tables are a recursive construct too.
+        try self.enterDepth();
+        defer self.exitDepth();
+
         const start_pos = self.current.pos;
         self.current = try self.nextToken(); // consume {
 

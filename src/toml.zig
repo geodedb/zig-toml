@@ -304,6 +304,63 @@ test "special floats" {
     try std.testing.expect(std.math.isNan(c.float));
 }
 
+test "U-H deep nesting rejected by defense-in-depth guards" {
+    // Build a TOML document with >max_depth nested arrays. Every recursion
+    // entrypoint (parseValue, parseArray, parseArrayContents,
+    // parseNestedArrayFromDoubleBracket, parseInlineTable) must call
+    // enterDepth/exitDepth so this cannot be bypassed by any call path.
+    const allocator = std.testing.allocator;
+    const depth: usize = 40;
+    const opts = ParseOptions{ .max_depth = 8, .max_bytes = 1024 * 1024 };
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try buf.appendSlice(allocator, "x = ");
+    for (0..depth) |_| try buf.append(allocator, '[');
+    try buf.append(allocator, '0');
+    for (0..depth) |_| try buf.append(allocator, ']');
+    try buf.append(allocator, '\n');
+
+    const result = parseWithError(allocator, buf.items, opts);
+    switch (result) {
+        .ok => |*d| {
+            var doc = @constCast(d);
+            doc.deinit();
+            try std.testing.expect(false); // should have failed
+        },
+        .err => |e| {
+            try std.testing.expectEqual(ErrorCode.LimitExceeded, e.code);
+        },
+    }
+}
+
+test "U-H deep nested inline tables rejected" {
+    // Inline tables also recurse; guard must fire.
+    const allocator = std.testing.allocator;
+    const depth: usize = 40;
+    const opts = ParseOptions{ .max_depth = 8, .max_bytes = 1024 * 1024 };
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try buf.appendSlice(allocator, "x = ");
+    for (0..depth) |_| try buf.appendSlice(allocator, "{ a = ");
+    try buf.append(allocator, '1');
+    for (0..depth) |_| try buf.appendSlice(allocator, " }");
+    try buf.append(allocator, '\n');
+
+    const result = parseWithError(allocator, buf.items, opts);
+    switch (result) {
+        .ok => |*d| {
+            var doc = @constCast(d);
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| {
+            try std.testing.expectEqual(ErrorCode.LimitExceeded, e.code);
+        },
+    }
+}
+
 test "parallel re-export is reachable" {
     // Smoke test: verify parallel.zig is reachable through the public
     // toml root module and the batch parse entry point works end-to-end.
