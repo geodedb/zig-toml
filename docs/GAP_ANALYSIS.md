@@ -7,8 +7,7 @@ Source of truth: GitLab issue tracker. This file mirrors the tracker for open ga
 
 Catalog: originally 21 open gaps. Post-closure status:
 
-- Fully closed: GAP-0002, GAP-0003, GAP-0021
-- Partial closure (docs/tooling only, underlying bug deferred): GAP-0005, GAP-0010
+- Fully closed: GAP-0002, GAP-0003, GAP-0005, GAP-0010, GAP-0021
 - Still open: 16 items
 Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
@@ -65,14 +64,13 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ### GAP-0005: Memory-leak CI gate missing
 
-- **Status:** Partial -- commit `19c9c20` (2026-04-18). Stays in active tracking; see Outstanding.
+- **Status:** Closed (full) -- commits `19c9c20` (initial Debug gate, 2026-04-18) and `b62f27e` (four-mode matrix via `.leak-gate` YAML anchor, 2026-04-18).
 - **Issue:** [#18](https://gitlab.com/devnw/zig/toml/-/issues/18)
 - **Category:** Test / Security
 - **Severity:** High
 - **Requirement source:** REQ-18.
-- **Addressed in this phase:** `.gitlab-ci.yml` now fails when `std.testing.allocator` reports a leak across the Zig test suite. `CONTRIBUTING.md` documents the gate.
-- **Addressed evidence:** `.gitlab-ci.yml` (leak-check stage), `CONTRIBUTING.md`, commit `19c9c20`.
-- **Outstanding:** The gate catches leaks observable via `std.testing.allocator` at test exit; it does NOT run under valgrind / ASan / TSan and does NOT cover code paths outside tests. Full coverage remains tracked on umbrella issue #42 (Q-16) as a strategic item. Leave issue #18 open; comment-only until full matrix lands.
+- **Addressed evidence:** `.gitlab-ci.yml` `.leak-gate` anchor wired into `test`, `test-release-safe`, `test-release-fast`, and `test-release-small`. `CONTRIBUTING.md` documents the gate. Commit `b62f27e`.
+- **Outstanding:** None for the in-tree testing surface. valgrind / ASan / TSan coverage of non-test code paths is tracked as a future enhancement under the umbrella issue #42 (Q-16) but is out of scope for REQ-18 as originally defined.
 
 ### GAP-0006: TOML encoder not implemented
 
@@ -122,13 +120,12 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ### GAP-0010: API docs missing parallel subsystem section
 
-- **Status:** Partial -- commit `a5bf263` (2026-04-18). Docs now honest; stays in active tracking because the subsystem itself has a known critical bug (GAP-0001 / U-A shadow parser).
+- **Status:** Closed (full) -- commits `a5bf263` (2026-04-18 initial docs), Plan 01 (shadow-parser removal, 2026-04-18), and `52d4297` + `c7fbcb5` (Plan 15 diagram + test guards + CHANGELOG credit, 2026-04-18).
 - **Issue:** [#21](https://gitlab.com/devnw/zig/toml/-/issues/21)
 - **Category:** Docs
 - **Severity:** Medium
-- **Addressed in this phase:** API.md, ARCHITECTURE.md, README.md, and ROADMAP.md gained Parallel Batch sections documenting `-Dthread-pool`, `parseDocuments`, `validateDocuments`, `extractKeys`, and the caveat that the batch path uses a shadow parser pending U-A. Closes the doc facets of Q-9 and Q-11 (partial).
-- **Addressed evidence:** `docs/API.md`, `docs/ARCHITECTURE.md`, `README.md`, `docs/ROADMAP.md`, commit `a5bf263`.
-- **Outstanding:** The docs describe the current (flawed) batch path. They cannot be considered "complete" in the REQ-01 sense until the shadow parser is replaced per GAP-0001. Keep #21 open; comment only.
+- **Addressed evidence:** `docs/API.md`, `docs/ARCHITECTURE.md` (Parallel Subsystem section with ASCII diagram documenting ParallelContext → parseWithError dispatch), `README.md`, `docs/ROADMAP.md`, `CHANGELOG.md` 0.2.0 credit, `tests/docs_hygiene_test.zig` (guards against doc drift). Commits `a5bf263`, Plan 01, `52d4297`, `c7fbcb5`.
+- **Outstanding:** None. The shadow parser was removed in Plan 01; the parallel path now delegates to `toml.parseWithError`, so the docs describe the real implementation. Close issue #21.
 
 ### GAP-0011: Bench suite not implemented
 
