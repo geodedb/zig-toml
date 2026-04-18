@@ -64,3 +64,44 @@ test "B-1 parse 10k top-level keys (baseline)" {
 
     std.log.warn("B-1 baseline: parse+lookup 10k keys = {d} ns", .{elapsed_ns});
 }
+
+const INLINE_KEY_COUNT: usize = 1000;
+
+fn buildInlineInput(alloc: std.mem.Allocator) ![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(alloc);
+    try buf.ensureTotalCapacity(alloc, INLINE_KEY_COUNT * 16);
+    try buf.appendSlice(alloc, "t = { ");
+    var i: usize = 0;
+    var line_buf: [64]u8 = undefined;
+    while (i < INLINE_KEY_COUNT) : (i += 1) {
+        if (i > 0) try buf.appendSlice(alloc, ", ");
+        const pair = try std.fmt.bufPrint(&line_buf, "k{d} = {d}", .{ i, i });
+        try buf.appendSlice(alloc, pair);
+    }
+    try buf.appendSlice(alloc, " }\n");
+    return buf.toOwnedSlice(alloc);
+}
+
+test "B-2 parse 1000-key inline table (P-12 regression pin)" {
+    const alloc = std.testing.allocator;
+    const input = try buildInlineInput(alloc);
+    defer alloc.free(input);
+
+    const t0 = monotonicNs();
+    var doc = try toml.parse(alloc, input, .{});
+    defer doc.deinit();
+    const elapsed_ns = monotonicNs() - t0;
+
+    const t = doc.root.get("t") orelse unreachable;
+    try std.testing.expectEqual(INLINE_KEY_COUNT, toml.value_mod.tableLen(t));
+
+    std.log.warn("B-2: parse 1000-key inline table = {d} ns", .{elapsed_ns});
+
+    // Hard ceiling: with O(1) dup-check, parsing a 1000-key inline table
+    // should take <50ms in ReleaseFast on any reasonable x86_64 laptop.
+    // In Debug this is ~5-10x slower; skip the assertion in Debug.
+    if (@import("builtin").mode != .Debug) {
+        try std.testing.expect(elapsed_ns < 50 * std.time.ns_per_ms);
+    }
+}
