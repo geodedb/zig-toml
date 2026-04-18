@@ -401,7 +401,10 @@ test "parallel re-export is reachable" {
     };
     var results: [4]parallel.ParseResult = undefined;
     parallel.parseDocuments(std.testing.allocator, &inputs, &results);
-    defer parallel.deinitPool();
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        parallel.deinitPool();
+    }
 
     for (results) |r| {
         try std.testing.expect(r.success);

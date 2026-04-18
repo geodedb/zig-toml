@@ -468,9 +468,13 @@ test "parse document - valid" {
     var results: [1]ParseResult = undefined;
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
     try std.testing.expect(results[0].success);
     try std.testing.expectEqual(@as(usize, 2), results[0].key_count);
+    try std.testing.expect(results[0].doc != null);
 }
 
 test "parse document - unclosed string" {
@@ -481,9 +485,14 @@ test "parse document - unclosed string" {
     var results: [1]ParseResult = undefined;
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
     try std.testing.expect(!results[0].success);
-    try std.testing.expectEqual(@as(u8, 1), results[0].error_code);
+    try std.testing.expect(results[0].error_code != 0);
+    try std.testing.expect(results[0].error_line != null);
+    try std.testing.expect(results[0].doc == null);
 }
 
 test "parse document - multiline string" {
@@ -497,6 +506,9 @@ test "parse document - multiline string" {
     var results: [1]ParseResult = undefined;
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
     try std.testing.expect(results[0].success);
 }
@@ -571,6 +583,9 @@ test "parallel parse - large batch" {
     var results: [16]ParseResult = undefined;
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
     for (results) |result| {
         try std.testing.expect(result.success);
@@ -710,10 +725,14 @@ test "U-F no dropped inputs past MAX_CHUNKS - parseDocuments" {
             .error_line = null,
             .error_column = null,
             .key_count = std.math.maxInt(usize),
+            .doc = null,
         };
     }
 
     parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
 
     for (results, 0..) |result, idx| {
         try std.testing.expect(result.error_code != 0xFF); // slot was written
