@@ -251,6 +251,99 @@ pub const Value = union(ValueTag) {
             else => null,
         };
     }
+
+    /// Return a `ValueIterator` dispatched on the value's tag:
+    /// - `.table`  → `.table_iter` (yields `{ key, value: *Value }`)
+    /// - `.array`  → `.array_iter` (yields `*Value`)
+    /// - other     → `.empty`
+    ///
+    /// The iterator borrows the underlying slices and stays valid for
+    /// the lifetime of this Value. Mutations to the table/array that
+    /// grow the backing storage (e.g. via `tableSetOwned`) invalidate
+    /// the iterator — do not mutate while iterating.
+    ///
+    /// Note: `ArrayIter` returns `*Value` pointers into the array's
+    /// backing slice. Growing the array via `arrayAppendOwned` may
+    /// reallocate that slice and invalidate previously-yielded
+    /// pointers.
+    pub fn iterator(self: *const Value) ValueIterator {
+        return switch (self.*) {
+            .table => |*t| .{ .table_iter = .{
+                .keys = t.map.keys(),
+                .values = t.map.values(),
+                .index = 0,
+            } },
+            .array => |*a| .{ .array_iter = .{
+                .items = a.items.items,
+                .index = 0,
+            } },
+            else => .empty,
+        };
+    }
+};
+
+/// Key-value pair yielded by `TableIter.next()`. Both `key` and
+/// `value` are borrows: they stay valid for the lifetime of the
+/// underlying Value (typically the document arena).
+pub const TableIterEntry = struct {
+    key: []const u8,
+    value: *Value,
+};
+
+/// Ordered iterator over a table's key-value pairs. Yields entries in
+/// the order they were inserted (the same order the TOML document
+/// declared them). Obtained via `Value.iterator()` on a `.table` value.
+pub const TableIter = struct {
+    keys: []const []const u8,
+    values: []const *Value,
+    index: usize = 0,
+
+    pub fn next(self: *TableIter) ?TableIterEntry {
+        if (self.index >= self.keys.len) return null;
+        const entry: TableIterEntry = .{
+            .key = self.keys[self.index],
+            .value = self.values[self.index],
+        };
+        self.index += 1;
+        return entry;
+    }
+
+    /// Reset the iterator so the next `next()` call yields the first
+    /// entry again. Useful for callers that want to make multiple
+    /// passes without re-calling `Value.iterator()`.
+    pub fn reset(self: *TableIter) void {
+        self.index = 0;
+    }
+};
+
+/// Ordered iterator over an array's items. Yields `*Value` pointers
+/// in index order. Pointers index into the array's backing slice; do
+/// not mutate the array while iterating. Obtained via
+/// `Value.iterator()` on a `.array` value.
+pub const ArrayIter = struct {
+    items: []Value,
+    index: usize = 0,
+
+    pub fn next(self: *ArrayIter) ?*Value {
+        if (self.index >= self.items.len) return null;
+        const v = &self.items[self.index];
+        self.index += 1;
+        return v;
+    }
+
+    pub fn reset(self: *ArrayIter) void {
+        self.index = 0;
+    }
+};
+
+/// Tagged iterator returned by `Value.iterator()`. The caller is
+/// expected to know which tag they are iterating (`table_iter` or
+/// `array_iter`) and index the matching arm. For non-table/non-array
+/// values, `Value.iterator()` returns `.empty`.
+pub const ValueIterator = union(enum) {
+    table_iter: TableIter,
+    array_iter: ArrayIter,
+    empty: void,
 };
 
 /// Parsed TOML document with memory ownership.
@@ -590,4 +683,113 @@ test "U-V asTable returns pointer for table, null for other tags" {
 
     var v_int: Value = .{ .integer = 0 };
     try std.testing.expect(v_int.asTable() == null);
+}
+
+test "U-V TableIter yields all entries in insertion order" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const tbl = try createTable(alloc);
+
+    // Insert five values in a fixed order. The iterator must yield
+    // them back in the same order (not hash order, not sorted order).
+    const keys = [_][]const u8{ "alpha", "beta", "gamma", "delta", "epsilon" };
+    for (keys, 0..) |k, i| {
+        const leaf = try alloc.create(Value);
+        leaf.* = .{ .integer = @intCast(i) };
+        try tableSet(alloc, tbl, k, leaf);
+    }
+
+    var it = tbl.iterator().table_iter;
+    var idx: usize = 0;
+    while (it.next()) |pair| : (idx += 1) {
+        try std.testing.expect(idx < keys.len);
+        try std.testing.expectEqualStrings(keys[idx], pair.key);
+        try std.testing.expectEqual(@as(i64, @intCast(idx)), pair.value.integer);
+    }
+    try std.testing.expectEqual(keys.len, idx);
+}
+
+test "U-V ArrayIter yields all items in index order" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const arr = try createArray(alloc);
+    var i: i64 = 0;
+    while (i < 5) : (i += 1) {
+        // Array stores Values by value; append the payload directly.
+        try arrayAppend(alloc, arr, .{ .integer = i * 10 });
+    }
+
+    var it = arr.iterator().array_iter;
+    var count: i64 = 0;
+    while (it.next()) |v| : (count += 1) {
+        try std.testing.expectEqual(count * 10, v.integer);
+    }
+    try std.testing.expectEqual(@as(i64, 5), count);
+}
+
+test "U-V iterator() on non-container returns .empty" {
+    const v_int: Value = .{ .integer = 1 };
+    switch (v_int.iterator()) {
+        .empty => {},
+        else => try std.testing.expect(false),
+    }
+
+    const v_str: Value = .{ .string = "x" };
+    switch (v_str.iterator()) {
+        .empty => {},
+        else => try std.testing.expect(false),
+    }
+}
+
+test "U-V ArrayIter on empty array yields nothing" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const arr = try createArray(arena.allocator());
+    var it = arr.iterator().array_iter;
+    try std.testing.expect(it.next() == null);
+    try std.testing.expect(it.next() == null); // idempotent after exhaustion
+}
+
+test "U-V TableIter on empty table yields nothing" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const tbl = try createTable(arena.allocator());
+    var it = tbl.iterator().table_iter;
+    try std.testing.expect(it.next() == null);
+    try std.testing.expect(it.next() == null);
+}
+
+test "U-V TableIter.reset allows two full passes" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const tbl = try createTable(alloc);
+    const keys = [_][]const u8{ "a", "b" };
+    for (keys) |k| {
+        const leaf = try alloc.create(Value);
+        leaf.* = .{ .integer = 0 };
+        try tableSet(alloc, tbl, k, leaf);
+    }
+
+    var it = tbl.iterator().table_iter;
+    var pass1: usize = 0;
+    while (it.next()) |_| pass1 += 1;
+    try std.testing.expectEqual(@as(usize, 2), pass1);
+
+    it.reset();
+    var pass2: usize = 0;
+    while (it.next()) |_| pass2 += 1;
+    try std.testing.expectEqual(@as(usize, 2), pass2);
 }
