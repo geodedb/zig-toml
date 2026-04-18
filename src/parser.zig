@@ -124,8 +124,9 @@ pub const Parser = struct {
         const start_pos = self.current.pos;
         self.current = try self.nextToken(); // consume [ or [[
 
-        // Parse key path
-        var path: std.ArrayList([]const u8) = .empty;
+        // Parse key path. 8 segments covers all realistic dotted paths
+        // without reallocating; deeper paths grow normally.
+        var path: std.ArrayList([]const u8) = try .initCapacity(alloc, 8);
         try self.parseKeyPath(alloc, &path);
 
         // Expect closing bracket(s)
@@ -260,8 +261,8 @@ pub const Parser = struct {
         // Save position of the key for error reporting
         const key_pos = self.current.pos;
 
-        // Parse key path (may be dotted)
-        var path: std.ArrayList([]const u8) = .empty;
+        // Parse key path (may be dotted). 8 segments handles practical paths.
+        var path: std.ArrayList([]const u8) = try .initCapacity(alloc, 8);
         try self.parseKeyPath(alloc, &path);
 
         if (path.items.len == 0) {
@@ -470,7 +471,9 @@ pub const Parser = struct {
     fn parseArray(self: *Parser, alloc: Allocator) ParseValueError!Value {
         self.current = try self.nextToken(); // consume [
 
-        var items: std.ArrayList(*Value) = .empty;
+        // 16-slot initial capacity covers most literal arrays without
+        // the ArrayList's doubling ladder (0->8->16 saves two reallocs).
+        var items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
 
         // Skip whitespace and newlines
         try self.skipArrayWhitespace();
@@ -527,7 +530,7 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        var outer_items: std.ArrayList(*Value) = .empty;
+        var outer_items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
 
         // Parse the inner array (we're already "inside" it after consuming [[)
         const inner_array = try alloc.create(Value);
@@ -579,8 +582,8 @@ pub const Parser = struct {
     }
 
     fn parseArrayContents(self: *Parser, alloc: Allocator) ParseValueError!Value {
-        // Parse array contents after the opening [ has been consumed
-        var items: std.ArrayList(*Value) = .empty;
+        // Parse array contents after the opening [ has been consumed.
+        var items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
 
         try self.skipArrayWhitespace();
 
@@ -626,7 +629,9 @@ pub const Parser = struct {
         const start_pos = self.current.pos;
         self.current = try self.nextToken(); // consume {
 
-        var entries: std.ArrayList(TableEntry) = .empty;
+        // Typical inline tables have a handful of entries; 16 avoids the
+        // initial reallocation ladder for essentially every real-world case.
+        var entries: std.ArrayList(TableEntry) = try .initCapacity(alloc, 16);
 
         while (self.current.tag != .right_brace and self.current.tag != .eof) {
             // Check for newlines in v1.0 mode
@@ -645,7 +650,7 @@ pub const Parser = struct {
             }
 
             // Parse key = value
-            var path: std.ArrayList([]const u8) = .empty;
+            var path: std.ArrayList([]const u8) = try .initCapacity(alloc, 8);
             try self.parseKeyPath(alloc, &path);
 
             if (self.current.tag != .equals) {
@@ -851,7 +856,10 @@ pub const Parser = struct {
     }
 
     fn decodeEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]const u8 {
-        var result: std.ArrayList(u8) = .empty;
+        // Pre-size to the raw length; escape decoding only shrinks (or leaves
+        // unchanged) the byte count, so this is a safe upper bound and avoids
+        // the ArrayList doubling ladder entirely on the hot string path.
+        var result: std.ArrayList(u8) = try .initCapacity(alloc, content.len);
 
         var i: usize = 0;
         while (i < content.len) {
@@ -873,7 +881,8 @@ pub const Parser = struct {
     }
 
     fn decodeMultilineEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]const u8 {
-        var result: std.ArrayList(u8) = .empty;
+        // Same upper-bound reasoning as decodeEscapes: output length <= input.
+        var result: std.ArrayList(u8) = try .initCapacity(alloc, content.len);
 
         var i: usize = 0;
         while (i < content.len) {
