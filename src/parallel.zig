@@ -1269,3 +1269,35 @@ test "Q-4/S-4 ParallelContext is a caller-owned struct" {
 
     for (results) |r| try std.testing.expect(r.success);
 }
+
+test "Q-4 concurrent parseDocuments calls on shared ParallelContext" {
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
+    // 4 threads, each doing 4 batches of 16 parses.
+    const Worker = struct {
+        fn run(c: *ParallelContext) void {
+            const inputs = [_][]const u8{"k = 1\n"} ** 16;
+            var results: [16]ParseResult = undefined;
+            var batch: usize = 0;
+            while (batch < 4) : (batch += 1) {
+                c.parseDocuments(&inputs, &results);
+                // Deinit docs each batch to avoid leaking across iterations.
+                for (results) |r| {
+                    if (!r.success) @panic("expected success in Q-4 stress");
+                    if (r.doc) |d| d.deinit();
+                }
+            }
+        }
+    };
+
+    var t0 = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+    var t1 = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+    var t2 = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+    var t3 = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+    t0.join();
+    t1.join();
+    t2.join();
+    t3.join();
+}
