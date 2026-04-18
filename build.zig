@@ -80,9 +80,27 @@ pub fn build(b: *std.Build) void {
     });
     const run_accept_tests = b.addRunArtifact(accept_tests);
 
+    // Fuzz harness -- exercises toml.parse with random bytes via
+    // std.testing.fuzz. Under `zig build test` this runs a single smoke
+    // iteration so regressions that panic on well-formed inputs still fail
+    // CI. Under `zig build test --fuzz` the Zig runner enters fuzzing mode
+    // and the CI `fuzz` stage wraps it with a 60s timeout.
+    const fuzz_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fuzz_parse.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
+    test_step.dependOn(&run_fuzz_tests.step);
 
     // Check step (compile without running)
     const check_mod = b.createModule(.{
