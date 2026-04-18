@@ -55,7 +55,13 @@ pub const DateTime = struct {
                 try writer.writeAll("Z");
             } else {
                 const sign: u8 = if (offset < 0) '-' else '+';
-                const abs_offset: u16 = @intCast(if (offset < 0) -offset else offset);
+                // `-offset` overflows when offset == i16.minInt (-32768)
+                // because i16 cannot represent +32768. Use @abs to get an
+                // unsigned u16 directly; valid TOML offsets are
+                // [-23:59, +23:59] but the parser elsewhere validates the
+                // range, so defensive handling here means even a
+                // hand-constructed out-of-range Value cannot panic.
+                const abs_offset: u16 = @abs(offset);
                 const hours = abs_offset / 60;
                 const mins = abs_offset % 60;
                 try writer.print("{c}{d:0>2}:{d:0>2}", .{ sign, hours, mins });
@@ -297,4 +303,28 @@ pub fn arrayAppend(alloc: Allocator, array: *Value, value: *Value) !void {
     @memcpy(new_items[0..a.items.len], a.items);
     new_items[a.items.len] = value;
     a.items = new_items;
+}
+
+test "U-T DateTime.format handles i16.minInt offset without panic" {
+    // The parser validates offsets to [-23:59, +23:59], but a caller
+    // constructing DateTime directly could place any i16 in
+    // offset_minutes. The previous `-offset` negation overflowed on
+    // i16.minInt. Assert format() now completes without panicking.
+    const dt = DateTime{
+        .year = 2024,
+        .month = 1,
+        .day = 15,
+        .hour = 10,
+        .minute = 30,
+        .second = 0,
+        .nanosecond = 0,
+        .offset_minutes = std.math.minInt(i16), // -32768
+    };
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    // Calling format() is the property being tested; no panic and some
+    // bytes written are the assertions. The exact offset string is not
+    // contractual since the input is already out of TOML spec range.
+    try dt.format(&aw.writer);
+    try std.testing.expect(aw.written().len > 0);
 }
