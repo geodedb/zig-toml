@@ -600,3 +600,256 @@ test "validate float NaN rejected when allow_nan is false" {
     try std.testing.expectEqual(@as(usize, 1), diags.len());
     try std.testing.expectEqual(DiagnosticCode.float_out_of_range, diags.items.items[0].code);
 }
+
+test "object validator: all required fields present" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\name = "svc"
+        \\port = 8080
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const name_node = SchemaNode.N.string(.{});
+    const port_node = SchemaNode.N.integer(.{ .min = 1, .max = 65535 });
+    const fields = [_]FieldSchema{
+        .{ .name = "name", .schema = &name_node, .required = true },
+        .{ .name = "port", .schema = &port_node, .required = true },
+    };
+    const schema_root = SchemaNode.N.object(&fields, .strict);
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try validateNode(&schema_root, doc.root, "", &diags);
+    try std.testing.expectEqual(@as(usize, 0), diags.len());
+}
+
+test "object validator: missing required field recorded" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "name = \"svc\"\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const name_node = SchemaNode.N.string(.{});
+    const port_node = SchemaNode.N.integer(.{});
+    const fields = [_]FieldSchema{
+        .{ .name = "name", .schema = &name_node, .required = true },
+        .{ .name = "port", .schema = &port_node, .required = true },
+    };
+    const schema_root = SchemaNode.N.object(&fields, .strict);
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try validateNode(&schema_root, doc.root, "", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.missing_required_field, diags.items.items[0].code);
+    try std.testing.expectEqualStrings("port", diags.items.items[0].path);
+}
+
+test "object validator: unknown field flagged in strict" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\name = "svc"
+        \\extra = 1
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const name_node = SchemaNode.N.string(.{});
+    const fields = [_]FieldSchema{
+        .{ .name = "name", .schema = &name_node, .required = true },
+    };
+    const schema_root = SchemaNode.N.object(&fields, .strict);
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try validateNode(&schema_root, doc.root, "", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.unknown_field, diags.items.items[0].code);
+    try std.testing.expectEqualStrings("extra", diags.items.items[0].path);
+}
+
+test "object validator: unknown field ignored in lax" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\name = "svc"
+        \\extra = 1
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const name_node = SchemaNode.N.string(.{});
+    const fields = [_]FieldSchema{
+        .{ .name = "name", .schema = &name_node, .required = true },
+    };
+    const schema_root = SchemaNode.N.object(&fields, .lax);
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try validateNode(&schema_root, doc.root, "", &diags);
+    try std.testing.expectEqual(@as(usize, 0), diags.len());
+}
+
+test "object validator: recursive nested objects accumulate path" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src =
+        \\[server]
+        \\host = "localhost"
+        \\port = "not_an_int"
+    ;
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const host_node = SchemaNode.N.string(.{});
+    const port_node = SchemaNode.N.integer(.{});
+    const inner_fields = [_]FieldSchema{
+        .{ .name = "host", .schema = &host_node, .required = true },
+        .{ .name = "port", .schema = &port_node, .required = true },
+    };
+    const server_node = SchemaNode.N.object(&inner_fields, .strict);
+    const root_fields = [_]FieldSchema{
+        .{ .name = "server", .schema = &server_node, .required = true },
+    };
+    const schema_root = SchemaNode.N.object(&root_fields, .strict);
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try validateNode(&schema_root, doc.root, "", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqualStrings("server.port", diags.items.items[0].path);
+    try std.testing.expectEqual(DiagnosticCode.type_mismatch, diags.items.items[0].code);
+}
+
+test "array validator: element type checked" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "tags = [\"a\", \"b\", 3]\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const elem = SchemaNode.N.string(.{});
+    const arr_node = SchemaNode.N.array(&elem, .{});
+    const fields = [_]FieldSchema{
+        .{ .name = "tags", .schema = &arr_node, .required = true },
+    };
+    const schema_root = SchemaNode.N.object(&fields, .strict);
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try validateNode(&schema_root, doc.root, "", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqualStrings("tags[2]", diags.items.items[0].path);
+    try std.testing.expectEqual(DiagnosticCode.type_mismatch, diags.items.items[0].code);
+}
+
+test "array validator: length bounds" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "tags = [\"a\"]\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const elem = SchemaNode.N.string(.{});
+    const arr_node = SchemaNode.N.array(&elem, .{ .min_len = 2, .max_len = 5 });
+    const fields = [_]FieldSchema{
+        .{ .name = "tags", .schema = &arr_node, .required = true },
+    };
+    const schema_root = SchemaNode.N.object(&fields, .strict);
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try validateNode(&schema_root, doc.root, "", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.array_too_short, diags.items.items[0].code);
+    try std.testing.expectEqualStrings("tags", diags.items.items[0].path);
+}
+
+test "one_of accepts first matching variant" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const variants = [_]SchemaNode{
+        SchemaNode.N.integer(.{}),
+        SchemaNode.N.string(.{}),
+    };
+    const node = SchemaNode.N.oneOf(&variants);
+
+    const v_int = Value{ .integer = 5 };
+    try validateNode(&node, &v_int, "x", &diags);
+    try std.testing.expectEqual(@as(usize, 0), diags.len());
+
+    const v_str = Value{ .string = "ok" };
+    try validateNode(&node, &v_str, "x", &diags);
+    try std.testing.expectEqual(@as(usize, 0), diags.len());
+}
+
+test "one_of emits one diagnostic when no variant matches" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const variants = [_]SchemaNode{
+        SchemaNode.N.integer(.{}),
+        SchemaNode.N.boolean(),
+    };
+    const node = SchemaNode.N.oneOf(&variants);
+
+    const v = Value{ .string = "nope" };
+    try validateNode(&node, &v, "x", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.one_of_no_match, diags.items.items[0].code);
+    try std.testing.expectEqualStrings("x", diags.items.items[0].path);
+}
+
+test "Schema.validate returns SchemaViolation when diags non-empty" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "port = \"wrong\"\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const port_node = SchemaNode.N.integer(.{});
+    const fields = [_]FieldSchema{
+        .{ .name = "port", .schema = &port_node, .required = true },
+    };
+    const schema_root = Schema{ .root = SchemaNode.N.object(&fields, .strict) };
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    const err = schema_root.validate(doc.root, &diags);
+    try std.testing.expectError(SchemaError.SchemaViolation, err);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+}
+
+test "Schema.validate succeeds when no diags" {
+    const alloc = std.testing.allocator;
+    const toml = @import("toml.zig");
+
+    const src = "port = 8080\n";
+    var doc = try toml.parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const port_node = SchemaNode.N.integer(.{});
+    const fields = [_]FieldSchema{
+        .{ .name = "port", .schema = &port_node, .required = true },
+    };
+    const schema_root = Schema{ .root = SchemaNode.N.object(&fields, .strict) };
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try schema_root.validate(doc.root, &diags);
+}
