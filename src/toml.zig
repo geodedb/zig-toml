@@ -32,11 +32,14 @@ pub const json_tagged = @import("json_tagged.zig");
 pub const encoder = @import("encoder.zig");
 pub const EncodeOptions = encoder.EncodeOptions;
 
+pub const encoder_cli = @import("encoder_cli.zig");
+
 pub const parallel = @import("parallel.zig");
 
 comptime {
-    // Force Zig test discovery to walk the encoder module.
+    // Force Zig test discovery to walk the encoder + encoder_cli modules.
     _ = encoder;
+    _ = encoder_cli;
 }
 
 /// Parse TOML input into a Document.

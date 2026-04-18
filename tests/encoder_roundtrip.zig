@@ -95,3 +95,35 @@ test "round-trip corpus" {
         try roundTrip(std.testing.allocator, src);
     }
 }
+
+test "decoder output feeds directly into encoder" {
+    // Simulates running TOML -> JSON -> TOML through the two CLIs by
+    // calling the library functions in the same process. This is the
+    // property toml-test enforces between the two binaries: the encoder
+    // must accept whatever tagged-JSON the decoder emits.
+    const cli = toml.encoder_cli;
+
+    const original_toml = "[server]\nhost = \"localhost\"\nport = 8080\n";
+
+    // Step A: TOML -> tagged JSON
+    const doc = try toml.parse(std.testing.allocator, original_toml, .{});
+    defer doc.deinit();
+
+    var tagged_json: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer tagged_json.deinit();
+    try toml.writeTaggedJson(doc, &tagged_json.writer);
+
+    // Step B: tagged JSON -> TOML
+    var reencoded: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer reencoded.deinit();
+    try cli.runEncodePipeline(std.testing.allocator, tagged_json.written(), &reencoded.writer);
+
+    // The re-encoded TOML must parse to the same value tree as the
+    // original; compare tagged-JSON projections byte-for-byte.
+    const doc2 = try toml.parse(std.testing.allocator, reencoded.written(), .{});
+    defer doc2.deinit();
+    var tagged2: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer tagged2.deinit();
+    try toml.writeTaggedJson(doc2, &tagged2.writer);
+    try std.testing.expectEqualStrings(tagged_json.written(), tagged2.written());
+}

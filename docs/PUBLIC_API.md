@@ -40,6 +40,7 @@ const TomlVersion
 const Value
 const ValueTag
 const encoder
+const encoder_cli
 const error_mod
 const json_tagged
 const parallel
