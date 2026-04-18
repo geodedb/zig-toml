@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Schema validation module (`src/schema.zig`) providing both runtime
+  `SchemaValidator` with `DiagnosticList` and a comptime-reflective
+  `toml.decode(T, alloc, doc)`. Closes GAP-0015. Construction of
+  `SchemaNode` values goes through the `SchemaNode.N` sub-namespace
+  (Zig forbids a declaration on a union type from sharing a name with
+  one of its tag fields). End-to-end example under
+  `examples/schema_validation.zig`.
 - Public mutation API on `Value` and `Document` (closes GAP-0009,
   GAP-0012, GAP-0013, GAP-0014):
   - Typed accessors: `asI64`, `asF64`, `asBool`, `asString`,

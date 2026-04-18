@@ -118,3 +118,13 @@ These items had the acute sub-issue fixed but the umbrella requirement remains o
 ## Platform-issue sync
 
 GitLab issue operations attempted at 2026-04-18 closure time. `glab auth status` reported `Invalid token provided in configuration file` -- token refresh required before issues can be closed or commented. No platform-side state was mutated during Phase 5. The outstanding issue-sync list is carried in the Phase 5 completion report returned by the gap-closer-reporter run.
+
+## Plan 08 closure (2026-04-18, feat/schema-validation)
+
+### GAP-0015: Schema validation module (RESOLVED)
+
+- **Issue:** [#13](https://gitlab.com/devnw/zig/toml/-/issues/13)
+- **Resolved by:** `src/schema.zig` providing runtime `SchemaValidator`
+  and comptime `toml.decode(T, alloc, doc)`.
+- **Tests:** See `src/schema.zig` test block and
+  `examples/schema_validation.zig`.

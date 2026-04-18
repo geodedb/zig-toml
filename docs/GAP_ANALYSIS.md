@@ -161,15 +161,6 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Current state (evidence):** No `asInt() / asFloat() / asBool()` helpers on `Value`.
 - **Recommended fix:** Add safe accessors returning `!T`.
 
-### GAP-0015: Schema validation module
-
-- **Issue:** [#13](https://gitlab.com/devnw/zig/toml/-/issues/13)
-- **Category:** Feature
-- **Severity:** Medium
-- **Requirement source:** REQ-13.
-- **Current state (evidence):** No `schema.zig`.
-- **Recommended fix:** Declarative schema with required/optional/type constraints.
-
 ### GAP-0016: Streaming parser API
 
 - **Issue:** [#14](https://gitlab.com/devnw/zig/toml/-/issues/14)
