@@ -102,6 +102,21 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_accept_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
 
+    // Benchmark harness (opt-in; not part of `test`).
+    const bench_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_table_insert.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    const run_bench_tests = b.addRunArtifact(bench_tests);
+    const bench_step = b.step("bench", "Run performance benchmarks (not part of test)");
+    bench_step.dependOn(&run_bench_tests.step);
+
     // Check step (compile without running)
     const check_mod = b.createModule(.{
         .root_source_file = b.path("src/toml.zig"),
