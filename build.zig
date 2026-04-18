@@ -80,6 +80,20 @@ pub fn build(b: *std.Build) void {
     });
     const run_accept_tests = b.addRunArtifact(accept_tests);
 
+    // Encoder round-trip tests -- parse(encode(parse(x))) must yield
+    // the same tagged-JSON projection as parse(x) for every corpus case.
+    const encoder_roundtrip_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/encoder_roundtrip.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    const run_encoder_roundtrip_tests = b.addRunArtifact(encoder_roundtrip_tests);
+
     // Differential tests -- walks tests/testdata/toml-test/ corpus.
     const differential_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -125,6 +139,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
+    test_step.dependOn(&run_encoder_roundtrip_tests.step);
     test_step.dependOn(&run_differential_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
     test_step.dependOn(&run_docs_hygiene.step);
