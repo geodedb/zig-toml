@@ -41,7 +41,7 @@ pub fn main() !void {
     ;
 
     // Parse the TOML document
-    var doc = try toml.parse(allocator, input, .{});
+    const doc = try toml.parse(allocator, input, .{});
     defer doc.deinit();
 
     try stdout.print("=== Basic TOML Parsing Example ===\n\n", .{});

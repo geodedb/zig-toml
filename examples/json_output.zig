@@ -88,10 +88,10 @@ fn outputTaggedJson(allocator: std.mem.Allocator, writer: anytype, input: []cons
     try writer.print("```toml\n{s}\n```\n\n", .{input});
 
     // Parse and output
-    var doc = try toml.parse(allocator, input, .{});
+    const doc = try toml.parse(allocator, input, .{});
     defer doc.deinit();
 
     try writer.print("Output:\n```json\n", .{});
-    try toml.writeTaggedJson(&doc, writer);
+    try toml.writeTaggedJson(doc, writer);
     try writer.print("```\n", .{});
 }

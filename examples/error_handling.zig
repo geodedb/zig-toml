@@ -97,9 +97,8 @@ fn parseAndReportWithVersion(
     const result = toml.parseWithError(allocator, input, .{ .version = version });
 
     switch (result) {
-        .ok => |*doc| {
-            var d = @constCast(doc);
-            defer d.deinit();
+        .ok => |doc| {
+            defer doc.deinit();
             try writer.print("  [OK] Parsed successfully\n", .{});
         },
         .err => |e| {

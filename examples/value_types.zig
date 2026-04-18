@@ -100,7 +100,7 @@ pub fn main() !void {
         \\price = 12.50
     ;
 
-    var doc = try toml.parse(allocator, input, .{});
+    const doc = try toml.parse(allocator, input, .{});
     defer doc.deinit();
 
     try stdout.print("=== TOML Value Types Example ===\n\n", .{});
@@ -190,7 +190,7 @@ pub fn main() !void {
     // Array of tables
     try stdout.print("\n--- Array of Tables ---\n", .{});
     if (doc.root.get("products")) |products| {
-        for (products.array.items.items, 0..) |product, i| {
+        for (toml.value_mod.arrayItems(products), 0..) |product, i| {
             try stdout.print("[[products]] ({d})\n", .{i});
             if (product.get("name")) |name| {
                 try stdout.print("  name = \"{s}\"\n", .{name.string});
@@ -261,7 +261,7 @@ fn printValue(writer: anytype, key: []const u8, value: ?*const toml.Value) !void
 
 fn printArray(writer: anytype, arr: *const toml.Value) !void {
     try writer.print("[", .{});
-    for (arr.array.items.items, 0..) |item, i| {
+    for (toml.value_mod.arrayItems(arr), 0..) |item, i| {
         if (i > 0) try writer.print(", ", .{});
         switch (item.*) {
             .integer => |n| try writer.print("{d}", .{n}),

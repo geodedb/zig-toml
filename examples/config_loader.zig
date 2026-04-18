@@ -151,11 +151,11 @@ pub fn main() !void {
     ;
 
     // Parse the TOML document
-    var doc = try toml.parse(allocator, config_toml, .{});
+    const doc = try toml.parse(allocator, config_toml, .{});
     defer doc.deinit();
 
     // Load configuration into struct
-    const config = try loadConfig(&doc);
+    const config = try loadConfig(doc);
 
     // Validate configuration
     try validateConfig(&config);
