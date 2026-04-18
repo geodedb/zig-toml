@@ -25,6 +25,10 @@ include:
 
 variables:
   ZIG_VERSION: "0.16.0"
+  # Coverage floor.
+  # Bumped deliberately as tests are added. The floor sits two below
+  # the live step count so normal flake does not mask a real drop.
+  COVERAGE_TEST_FLOOR: "8"
 
 stages:
   - lint
@@ -76,6 +80,33 @@ stages:
   - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
   - zig version
 
+# Leak-gate post-processor. Operates on the file named in "$LOG".
+# Fails the job on any of:
+#   - Zig std.testing.allocator leak banner.
+#   - Missing "Build Summary" line (test runner aborted).
+#   - Any "N failed" count in the summary.
+# GAP-0005: applied to all four optimize modes so a leak that only
+# surfaces under ReleaseSafe's stricter tripwire or ReleaseFast's
+# different allocator layout cannot pass CI silently.
+.leak-gate: &leak-gate
+  - |
+    if [ -z "${LOG:-}" ]; then
+      echo "LEAK GATE: LOG env var not set." >&2
+      exit 1
+    fi
+    if grep -qE "(memory leak detected|not freed)" "$LOG"; then
+      echo "LEAK GATE: Zig test allocator reported leaked allocations in $LOG." >&2
+      exit 1
+    fi
+    if ! grep -qE "Build Summary: [0-9]+/[0-9]+ steps succeeded;" "$LOG"; then
+      echo "LEAK GATE: no Build Summary line in $LOG -- runner aborted early." >&2
+      exit 1
+    fi
+    if grep -qE "[0-9]+ failed" "$LOG"; then
+      echo "LEAK GATE: test summary reports failures in $LOG." >&2
+      exit 1
+    fi
+
 # Override zig-format component to use the project's ZIG_VERSION.
 # The v1.2.1 component defaults to 0.14.0 and does not accept a version input.
 zig-format:
@@ -93,15 +124,12 @@ build:
 
 # Unit tests
 #
-# Leak gate: Zig's std.testing.allocator is a `GeneralPurposeAllocator`
-# with leak-checking turned on -- any test that leaks memory will cause
-# the test runner to exit non-zero with a diagnostic. We tee the build
-# output to a log and post-process it to:
-#   1. fail the job on any occurrence of the Zig leak-detector banner
-#      ("memory address 0x.*not freed", "memory leak detected"), and
-#   2. fail the job if the summary line reports any failed tests.
-# This closes the loop so a future change that reintroduces a leak will
-# break main CI instead of silently passing.
+# Leak gate (Debug): Zig's std.testing.allocator is a
+# `GeneralPurposeAllocator` with leak-checking turned on -- any test
+# that leaks memory will cause the runner to exit non-zero with a
+# diagnostic. We tee the build output to a log and apply the shared
+# `.leak-gate` anchor to fail the job on leaks, aborted runs, or
+# any reported failures. Debug is the primary leak-check surface.
 test:
   stage: test
   image: debian:bookworm-slim
@@ -110,21 +138,8 @@ test:
   script:
     - set -o pipefail
     - zig build test --summary all 2>&1 | tee test.log
-    - |
-      if grep -qE "(memory leak detected|not freed)" test.log; then
-        echo "LEAK GATE: Zig test allocator reported leaked allocations." >&2
-        exit 1
-      fi
-    - |
-      if ! grep -qE "Build Summary: [0-9]+/[0-9]+ steps succeeded;" test.log; then
-        echo "LEAK GATE: no Build Summary line -- test runner aborted early." >&2
-        exit 1
-      fi
-    - |
-      if grep -qE "[0-9]+ failed" test.log; then
-        echo "LEAK GATE: test summary reports failures." >&2
-        exit 1
-      fi
+    - LOG=test.log
+    - *leak-gate
   artifacts:
     when: always
     paths:
@@ -133,14 +148,25 @@ test:
   needs:
     - build
 
-# Release optimization tests
+# Release optimization tests -- all three release modes now run the
+# shared `.leak-gate` post-processor so a leak surfaced only under
+# stricter ReleaseSafe tripwires or ReleaseFast's allocator layout
+# is not silently masked (GAP-0005 full closure).
 test-release-safe:
   stage: test
   image: debian:bookworm-slim
   before_script:
     - *install-zig
   script:
-    - zig build test -Doptimize=ReleaseSafe --summary all
+    - set -o pipefail
+    - zig build test -Doptimize=ReleaseSafe --summary all 2>&1 | tee test-release-safe.log
+    - LOG=test-release-safe.log
+    - *leak-gate
+  artifacts:
+    when: always
+    paths:
+      - test-release-safe.log
+    expire_in: 1 week
   needs:
     - build
 
@@ -151,7 +177,15 @@ test-release-fast:
   before_script:
     - *install-zig
   script:
-    - zig build test -Doptimize=ReleaseFast --summary all
+    - set -o pipefail
+    - zig build test -Doptimize=ReleaseFast --summary all 2>&1 | tee test-release-fast.log
+    - LOG=test-release-fast.log
+    - *leak-gate
+  artifacts:
+    when: always
+    paths:
+      - test-release-fast.log
+    expire_in: 1 week
   needs:
     - build
 
@@ -162,7 +196,87 @@ test-release-small:
   before_script:
     - *install-zig
   script:
-    - zig build test -Doptimize=ReleaseSmall --summary all
+    - set -o pipefail
+    - zig build test -Doptimize=ReleaseSmall --summary all 2>&1 | tee test-release-small.log
+    - LOG=test-release-small.log
+    - *leak-gate
+  artifacts:
+    when: always
+    paths:
+      - test-release-small.log
+    expire_in: 1 week
+  needs:
+    - build
+
+# Public-API drift gate.
+# Fails the pipeline if the list of `pub const|fn` symbols in
+# src/toml.zig disagrees with docs/PUBLIC_API.md. A rename, removal,
+# or addition MUST land in the same MR that updates the manifest.
+# Closes Q-16.
+api-drift:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - apt-get update && apt-get install -y grep coreutils gawk diffutils
+  script:
+    - set -e
+    - |
+      grep -nE '^pub (const|fn) ' src/toml.zig \
+        | awk '{
+            for (i=1; i<=NF; i++) {
+              if ($i == "const" || $i == "fn") {
+                name = $(i+1);
+                sub(/[(=:].*$/, "", name);
+                print $i, name;
+                break;
+              }
+            }
+          }' \
+        | sort -u > /tmp/live_api.txt
+    - |
+      awk '/^(const|fn) [A-Za-z_][A-Za-z_0-9]*$/' docs/PUBLIC_API.md \
+        | sort -u > /tmp/manifest_api.txt
+    - |
+      if ! diff -u /tmp/manifest_api.txt /tmp/live_api.txt; then
+        echo "API-DRIFT: src/toml.zig disagrees with docs/PUBLIC_API.md." >&2
+        echo "Update docs/PUBLIC_API.md in the same MR." >&2
+        exit 1
+      fi
+  needs:
+    - build
+
+# Coverage floor.
+# The repo does not ship with kcov or llvm-cov integration. Until it
+# does, guard regressions coarsely: fail the pipeline if the number
+# of passing build steps drops below the committed baseline. Bumping
+# the floor is a deliberate edit of COVERAGE_TEST_FLOOR (top of file)
+# in the same MR that adds tests. Closes Q-16 (coverage leg).
+coverage-floor:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - set -o pipefail
+    - zig build test --summary all 2>&1 | tee coverage.log
+    - |
+      PASSED=$(grep -oE 'Build Summary: [0-9]+/[0-9]+ steps succeeded' coverage.log \
+        | head -1 | awk '{ split($3, a, "/"); print a[1] }')
+      if [ -z "$PASSED" ]; then
+        echo "COVERAGE-FLOOR: no Build Summary line in zig build test output." >&2
+        exit 1
+      fi
+      echo "passed_steps=$PASSED floor=$COVERAGE_TEST_FLOOR"
+      if [ "$PASSED" -lt "$COVERAGE_TEST_FLOOR" ]; then
+        echo "COVERAGE-FLOOR: $PASSED passed steps < floor $COVERAGE_TEST_FLOOR." >&2
+        echo "Either restore coverage or lower COVERAGE_TEST_FLOOR in the same MR." >&2
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths:
+      - coverage.log
+    expire_in: 1 week
   needs:
     - build
 

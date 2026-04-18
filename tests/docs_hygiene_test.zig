@@ -15,6 +15,8 @@ const std = @import("std");
 
 const ARCH_PATH = "docs/ARCHITECTURE.md";
 const CHANGELOG_PATH = "CHANGELOG.md";
+const TOML_ZIG_PATH = "src/toml.zig";
+const PUBLIC_API_PATH = "docs/PUBLIC_API.md";
 
 fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     // Zig 0.16: file I/O goes through the Io dispatch in std.testing.io.
@@ -163,5 +165,83 @@ test "CHANGELOG credits the 0.2.0 audit closures" {
             std.debug.print("missing '{s}' in {s}\n", .{ needle, CHANGELOG_PATH });
             try std.testing.expect(false);
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// PUBLIC_API.md -- drift gate (Q-16)
+// ---------------------------------------------------------------------
+
+/// Extract the leading name after `pub const` / `pub fn`. Returns the
+/// identifier up to the first space, `=`, `(`, or `:`.
+fn extractPubName(line: []const u8) ?[]const u8 {
+    const prefixes = [_][]const u8{ "pub const ", "pub fn " };
+    for (prefixes) |p| {
+        if (std.mem.startsWith(u8, line, p)) {
+            const rest = line[p.len..];
+            var end: usize = 0;
+            while (end < rest.len) : (end += 1) {
+                const c = rest[end];
+                if (c == ' ' or c == '=' or c == '(' or c == ':') break;
+            }
+            if (end == 0) return null;
+            return rest[0..end];
+        }
+    }
+    return null;
+}
+
+test "extractPubName smoke" {
+    try std.testing.expectEqualStrings(
+        "parse",
+        extractPubName("pub fn parse(alloc: Allocator) !void {").?,
+    );
+    try std.testing.expectEqualStrings(
+        "Value",
+        extractPubName("pub const Value = value_mod.Value;").?,
+    );
+    try std.testing.expectEqual(
+        @as(?[]const u8, null),
+        extractPubName("const not_pub = 1;"),
+    );
+}
+
+test "PUBLIC_API.md matches pub symbols in src/toml.zig" {
+    const allocator = std.testing.allocator;
+
+    const src = try readFile(allocator, TOML_ZIG_PATH);
+    defer allocator.free(src);
+
+    const manifest = try readFile(allocator, PUBLIC_API_PATH);
+    defer allocator.free(manifest);
+
+    // Walk src line-by-line; for each `pub const|fn NAME`, assert the
+    // manifest contains "const NAME" or "fn NAME" as a substring.
+    var it = std.mem.splitScalar(u8, src, '\n');
+    var missing: std.ArrayList(u8) = .empty;
+    defer missing.deinit(allocator);
+
+    while (it.next()) |line| {
+        const name = extractPubName(line) orelse continue;
+        const kind: []const u8 = if (std.mem.startsWith(u8, line, "pub fn "))
+            "fn "
+        else
+            "const ";
+        var buf: [128]u8 = undefined;
+        const needle = std.fmt.bufPrint(&buf, "{s}{s}", .{ kind, name }) catch unreachable;
+        if (std.mem.indexOf(u8, manifest, needle) == null) {
+            var line_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(
+                &line_buf,
+                "missing '{s}' in PUBLIC_API.md\n",
+                .{needle},
+            ) catch unreachable;
+            try missing.appendSlice(allocator, msg);
+        }
+    }
+
+    if (missing.items.len != 0) {
+        std.debug.print("{s}", .{missing.items});
+        try std.testing.expect(false);
     }
 }
