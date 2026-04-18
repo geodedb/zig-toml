@@ -252,10 +252,28 @@ fn writeAnyValue(v: *const Value, writer: anytype, options: EncodeOptions) anyer
 fn writeInlineArray(arr: *const Value, writer: anytype, options: EncodeOptions) !void {
     std.debug.assert(arr.* == .array);
     const items = arr.array.items.items;
-    try writer.writeByte('[');
-    for (items, 0..) |*item, i| {
-        if (i > 0) try writer.writeAll(", ");
+
+    // Wrap only when indent > 0 AND the item count exceeds the threshold.
+    // indent=0 is the default and always stays on one line so short
+    // arrays remain compact regardless of inline_threshold value.
+    const should_wrap = options.indent > 0 and items.len > options.inline_threshold;
+
+    if (!should_wrap) {
+        try writer.writeByte('[');
+        for (items, 0..) |*item, i| {
+            if (i > 0) try writer.writeAll(", ");
+            try writeAnyValue(item, writer, options);
+        }
+        try writer.writeByte(']');
+        return;
+    }
+
+    try writer.writeAll("[\n");
+    for (items) |*item| {
+        var n: u8 = 0;
+        while (n < options.indent) : (n += 1) try writer.writeByte(' ');
         try writeAnyValue(item, writer, options);
+        try writer.writeAll(",\n");
     }
     try writer.writeByte(']');
 }

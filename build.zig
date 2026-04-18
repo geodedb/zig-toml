@@ -94,6 +94,20 @@ pub fn build(b: *std.Build) void {
     });
     const run_encoder_roundtrip_tests = b.addRunArtifact(encoder_roundtrip_tests);
 
+    // Encoder golden-output tests -- byte-exact contract for
+    // sort_keys determinism and wrapped-array pretty-printing.
+    const encoder_golden_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/encoder_golden.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    const run_encoder_golden_tests = b.addRunArtifact(encoder_golden_tests);
+
     // Differential tests -- walks tests/testdata/toml-test/ corpus.
     const differential_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -140,6 +154,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
     test_step.dependOn(&run_encoder_roundtrip_tests.step);
+    test_step.dependOn(&run_encoder_golden_tests.step);
     test_step.dependOn(&run_differential_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
     test_step.dependOn(&run_docs_hygiene.step);
