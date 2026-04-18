@@ -23,26 +23,33 @@ fn tableEntryLessThan(_: void, a: TableEntry, b: TableEntry) bool {
 
 fn writeValue(v: *const Value, writer: anytype) !void {
     switch (v.*) {
-        .table => |t| {
+        .table => |*t| {
             try writer.writeByte('{');
             // Always sort keys so the emitter output is deterministic
-            // regardless of input-order choices the parser makes. For
-            // small tables we copy onto a stack buffer; for larger ones we
-            // allocate scratch from the SMP allocator. Previously tables
-            // with >256 entries fell through to the parser's insertion
-            // order, violating the documented "sorted at every level"
-            // contract (toml-test comparison failures under adversarial
-            // inputs; non-reproducible diffs).
+            // regardless of insertion order. The hash-indexed storage
+            // gives us O(1) put/get; for emit we snapshot keys+values
+            // into a sortable TableEntry buffer. Previously (flat slice
+            // world), tables with >256 entries fell through to insertion
+            // order, violating the "sorted at every level" contract.
+            const n = t.map.count();
             var stack_sorted: [256]TableEntry = undefined;
             var heap_sorted: ?[]TableEntry = null;
             defer if (heap_sorted) |slice| std.heap.smp_allocator.free(slice);
 
-            const sorted_slice: []TableEntry = if (t.entries.len <= stack_sorted.len) blk: {
-                @memcpy(stack_sorted[0..t.entries.len], t.entries);
-                break :blk stack_sorted[0..t.entries.len];
+            const sorted_slice: []TableEntry = if (n <= stack_sorted.len) blk: {
+                const keys = t.map.keys();
+                const values = t.map.values();
+                for (0..n) |i| {
+                    stack_sorted[i] = .{ .key = keys[i], .value = values[i] };
+                }
+                break :blk stack_sorted[0..n];
             } else blk: {
-                const buf = try std.heap.smp_allocator.alloc(TableEntry, t.entries.len);
-                @memcpy(buf, t.entries);
+                const buf = try std.heap.smp_allocator.alloc(TableEntry, n);
+                const keys = t.map.keys();
+                const values = t.map.values();
+                for (0..n) |i| {
+                    buf[i] = .{ .key = keys[i], .value = values[i] };
+                }
                 heap_sorted = buf;
                 break :blk buf;
             };
@@ -56,9 +63,9 @@ fn writeValue(v: *const Value, writer: anytype) !void {
             }
             try writer.writeByte('}');
         },
-        .array => |a| {
+        .array => |*a| {
             try writer.writeByte('[');
-            for (a.items, 0..) |item, i| {
+            for (a.items.items, 0..) |item, i| {
                 if (i > 0) try writer.writeByte(',');
                 try writeValue(item, writer);
             }

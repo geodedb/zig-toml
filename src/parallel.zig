@@ -193,7 +193,7 @@ fn parseDocument(allocator: std.mem.Allocator, input: []const u8) ParseResult {
             // Count top-level keys in the root table.
             var key_count: usize = 0;
             switch (doc_val.root.*) {
-                .table => |t| key_count = t.entries.len,
+                .table => |*t| key_count = t.map.count(),
                 else => {},
             }
             return .{
@@ -428,25 +428,27 @@ fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyE
             // doc_val.deinit() — same rationale as validateDocument.
             const root = doc_val.root;
             switch (root.*) {
-                .table => |t| {
-                    if (t.entries.len == 0) {
+                .table => |*t| {
+                    const n = t.map.count();
+                    if (n == 0) {
                         return .{ .keys = null, .count = 0, .success = true };
                     }
+                    const keys_slice = t.map.keys();
                     var buf: std.ArrayList(u8) = .empty;
                     errdefer buf.deinit(allocator);
                     // Capacity hint: total bytes = sum(key_len) + (N-1) commas.
                     var cap: usize = 0;
-                    for (t.entries) |e| cap += e.key.len;
-                    cap += t.entries.len -| 1;
+                    for (keys_slice) |k| cap += k.len;
+                    cap += n -| 1;
                     buf.ensureTotalCapacity(allocator, cap) catch {
                         return .{ .keys = null, .count = 0, .success = false };
                     };
-                    for (t.entries, 0..) |e, i| {
+                    for (keys_slice, 0..) |k, i| {
                         if (i > 0) buf.append(allocator, ',') catch {
                             buf.deinit(allocator);
                             return .{ .keys = null, .count = 0, .success = false };
                         };
-                        buf.appendSlice(allocator, e.key) catch {
+                        buf.appendSlice(allocator, k) catch {
                             buf.deinit(allocator);
                             return .{ .keys = null, .count = 0, .success = false };
                         };
@@ -454,7 +456,7 @@ fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyE
                     const owned = buf.toOwnedSlice(allocator) catch {
                         return .{ .keys = null, .count = 0, .success = false };
                     };
-                    return .{ .keys = owned, .count = t.entries.len, .success = true };
+                    return .{ .keys = owned, .count = n, .success = true };
                 },
                 else => {
                     // root is always a table per the TOML grammar. Defensive fallback.

@@ -135,7 +135,10 @@ pub const TimeLocal = struct {
     }
 };
 
-/// Table entry for ordered key-value storage.
+/// Table entry snapshot returned by `tableIterator`. The underlying
+/// storage is a `std.StringArrayHashMapUnmanaged(*Value)`; this struct
+/// exists only so callers (JSON emitter, accept tests) have a stable
+/// shape to sort and iterate without reaching into hash-map internals.
 pub const TableEntry = struct {
     key: []const u8,
     value: *Value,
@@ -154,8 +157,10 @@ pub const Value = union(ValueTag) {
     date_local: DateLocal,
     time_local: TimeLocal,
 
+    /// Insertion-ordered, hash-indexed table storage.
+    /// O(1) get/put, iteration follows insertion order.
     pub const Table = struct {
-        entries: []TableEntry,
+        map: std.StringArrayHashMapUnmanaged(*Value) = .{},
         is_inline: bool = false,
         is_array_of_tables: bool = false,
         defined_explicitly: bool = false,
@@ -164,7 +169,7 @@ pub const Value = union(ValueTag) {
     };
 
     pub const Array = struct {
-        items: []*Value,
+        items: std.ArrayListUnmanaged(*Value) = .empty,
         is_static: bool = false, // true if defined as [] syntax, not [[]]
     };
 
@@ -173,29 +178,18 @@ pub const Value = union(ValueTag) {
         if (path.len == 0) return self;
 
         switch (self.*) {
-            .table => |t| {
-                for (t.entries) |entry| {
-                    if (std.mem.eql(u8, entry.key, path[0])) {
-                        return entry.value.getPath(path[1..]);
-                    }
-                }
-                return null;
+            .table => |*t| {
+                const child = t.map.get(path[0]) orelse return null;
+                return child.getPath(path[1..]);
             },
             else => return null,
         }
     }
 
-    /// Get a value from a table by key.
+    /// Get a value from a table by key. O(1).
     pub fn get(self: *const Value, key: []const u8) ?*const Value {
         return switch (self.*) {
-            .table => |t| {
-                for (t.entries) |entry| {
-                    if (std.mem.eql(u8, entry.key, key)) {
-                        return entry.value;
-                    }
-                }
-                return null;
-            },
+            .table => |*t| t.map.get(key),
             else => null,
         };
     }
@@ -222,87 +216,108 @@ pub const Document = struct {
     }
 };
 
-/// Create an empty table value.
+/// Create an empty table value on the given allocator.
 pub fn createTable(alloc: Allocator) !*Value {
-    const val = try alloc.create(Value);
-    val.* = .{ .table = .{ .entries = &.{} } };
-    return val;
+    const v = try alloc.create(Value);
+    v.* = .{ .table = .{} };
+    return v;
 }
 
-/// Create an empty array value.
+/// Create an empty array value on the given allocator.
 pub fn createArray(alloc: Allocator) !*Value {
-    const val = try alloc.create(Value);
-    val.* = .{ .array = .{ .items = &.{} } };
-    return val;
+    const v = try alloc.create(Value);
+    v.* = .{ .array = .{} };
+    return v;
 }
 
-/// Add or get a key in a table, returning the value pointer.
+/// Get-or-create a child table by key. Returns the existing pointer if
+/// the key is already present (even if its value is not a table — caller
+/// is responsible for that invariant). O(1).
 pub fn tableGetOrCreate(alloc: Allocator, table: *Value, key: []const u8) !*Value {
     std.debug.assert(table.* == .table);
     const t = &table.table;
 
-    // Check if key exists
-    for (t.entries) |entry| {
-        if (std.mem.eql(u8, entry.key, key)) {
-            return entry.value;
-        }
+    const gop = try t.map.getOrPut(alloc, key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try createTable(alloc);
     }
-
-    // Create new entry
-    const new_val = try createTable(alloc);
-    const key_copy = try alloc.dupe(u8, key);
-
-    var new_entries = try alloc.alloc(TableEntry, t.entries.len + 1);
-    @memcpy(new_entries[0..t.entries.len], t.entries);
-    new_entries[t.entries.len] = .{ .key = key_copy, .value = new_val };
-    t.entries = new_entries;
-
-    return new_val;
+    return gop.value_ptr.*;
 }
 
-/// Set a value in a table.
+/// Set a value in a table by key. Overwrites if the key already exists.
+/// The key slice is stored as-is; callers that need to own the bytes
+/// (e.g. parser paths that synthesize key text) must dupe before calling.
+/// O(1).
 pub fn tableSet(alloc: Allocator, table: *Value, key: []const u8, value: *Value) !void {
     std.debug.assert(table.* == .table);
     const t = &table.table;
-
-    // Check if key exists
-    for (t.entries) |*entry| {
-        if (std.mem.eql(u8, entry.key, key)) {
-            entry.value = value;
-            return;
-        }
-    }
-
-    // Create new entry
-    const key_copy = try alloc.dupe(u8, key);
-    var new_entries = try alloc.alloc(TableEntry, t.entries.len + 1);
-    @memcpy(new_entries[0..t.entries.len], t.entries);
-    new_entries[t.entries.len] = .{ .key = key_copy, .value = value };
-    t.entries = new_entries;
+    try t.map.put(alloc, key, value);
 }
 
-/// Check if a table contains a key.
+/// Check if a table contains a key. O(1).
 pub fn tableContains(table: *const Value, key: []const u8) bool {
     return switch (table.*) {
-        .table => |t| {
-            for (t.entries) |entry| {
-                if (std.mem.eql(u8, entry.key, key)) return true;
-            }
-            return false;
-        },
+        .table => |*t| t.map.contains(key),
         else => false,
     };
 }
 
-/// Append a value to an array.
+/// Return the number of entries in a table.
+pub fn tableLen(table: *const Value) usize {
+    return switch (table.*) {
+        .table => |*t| t.map.count(),
+        else => 0,
+    };
+}
+
+/// Iterator over a table in insertion order.
+pub const TableIterator = struct {
+    keys: []const []const u8,
+    values: []const *Value,
+    i: usize,
+
+    pub fn next(self: *TableIterator) ?TableEntry {
+        if (self.i >= self.keys.len) return null;
+        const entry: TableEntry = .{
+            .key = self.keys[self.i],
+            .value = self.values[self.i],
+        };
+        self.i += 1;
+        return entry;
+    }
+};
+
+/// Return an iterator that yields table entries in insertion order.
+/// Panics (in debug) if `table` is not a table.
+pub fn tableIterator(table: *const Value) TableIterator {
+    std.debug.assert(table.* == .table);
+    const t = &table.table;
+    return .{
+        .keys = t.map.keys(),
+        .values = t.map.values(),
+        .i = 0,
+    };
+}
+
+/// Append a value to an array. O(1) amortized.
 pub fn arrayAppend(alloc: Allocator, array: *Value, value: *Value) !void {
     std.debug.assert(array.* == .array);
     const a = &array.array;
+    try a.items.append(alloc, value);
+}
 
-    var new_items = try alloc.alloc(*Value, a.items.len + 1);
-    @memcpy(new_items[0..a.items.len], a.items);
-    new_items[a.items.len] = value;
-    a.items = new_items;
+/// Return the number of items in an array.
+pub fn arrayLen(array: *const Value) usize {
+    return switch (array.*) {
+        .array => |*a| a.items.items.len,
+        else => 0,
+    };
+}
+
+/// Return the items slice of an array (insertion order).
+pub fn arrayItems(array: *const Value) []const *Value {
+    std.debug.assert(array.* == .array);
+    return array.array.items.items;
 }
 
 test "U-T DateTime.format handles i16.minInt offset without panic" {
@@ -327,4 +342,84 @@ test "U-T DateTime.format handles i16.minInt offset without panic" {
     // contractual since the input is already out of TOML spec range.
     try dt.format(&aw.writer);
     try std.testing.expect(aw.written().len > 0);
+}
+
+test "C-1 tableSet preserves insertion order for N keys" {
+    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const root = try createTable(aa);
+
+    var i: usize = 0;
+    var name_buf: [32]u8 = undefined;
+    while (i < 1000) : (i += 1) {
+        const name = try std.fmt.bufPrint(&name_buf, "k{d}", .{i});
+        const v = try aa.create(Value);
+        v.* = .{ .integer = @intCast(i) };
+        // name_buf is reused each loop; dupe so the table owns stable bytes.
+        const owned = try aa.dupe(u8, name);
+        try tableSet(aa, root, owned, v);
+    }
+
+    // Iterate and assert we see exactly k0, k1, ..., k999 in order.
+    var idx: usize = 0;
+    var it = tableIterator(root);
+    while (it.next()) |entry| : (idx += 1) {
+        var expect_buf: [32]u8 = undefined;
+        const expect_name = try std.fmt.bufPrint(&expect_buf, "k{d}", .{idx});
+        try std.testing.expectEqualStrings(expect_name, entry.key);
+        try std.testing.expectEqual(@as(i64, @intCast(idx)), entry.value.integer);
+    }
+    try std.testing.expectEqual(@as(usize, 1000), idx);
+}
+
+test "C-2 tableSet on existing key overwrites without growing" {
+    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const root = try createTable(aa);
+
+    const v1 = try aa.create(Value);
+    v1.* = .{ .integer = 1 };
+    try tableSet(aa, root, "k", v1);
+
+    const v2 = try aa.create(Value);
+    v2.* = .{ .integer = 2 };
+    try tableSet(aa, root, "k", v2);
+
+    try std.testing.expectEqual(@as(usize, 1), tableLen(root));
+    const got = root.get("k") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 2), got.integer);
+}
+
+test "C-3 tableGetOrCreate returns existing pointer on second call" {
+    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const root = try createTable(aa);
+    const a = try tableGetOrCreate(aa, root, "x");
+    const b = try tableGetOrCreate(aa, root, "x");
+    try std.testing.expectEqual(a, b);
+    try std.testing.expectEqual(@as(usize, 1), tableLen(root));
+}
+
+test "C-4 tableContains is true after insert, false for missing" {
+    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const root = try createTable(aa);
+    const v = try aa.create(Value);
+    v.* = .{ .integer = 42 };
+    try tableSet(aa, root, "present", v);
+
+    try std.testing.expect(tableContains(root, "present"));
+    try std.testing.expect(!tableContains(root, "absent"));
 }

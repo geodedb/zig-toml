@@ -156,14 +156,8 @@ pub const Parser = struct {
         for (path, 0..) |key, i| {
             const is_last = (i == path.len - 1);
 
-            // Check if key exists
-            var found: ?*Value = null;
-            for (current.table.entries) |entry| {
-                if (std.mem.eql(u8, entry.key, key)) {
-                    found = entry.value;
-                    break;
-                }
-            }
+            // Check if key exists. O(1).
+            const found: ?*Value = current.table.map.get(key);
 
             if (found) |existing| {
                 if (is_last) {
@@ -208,7 +202,7 @@ pub const Parser = struct {
                     // Intermediate key
                     if (existing.* == .array) {
                         // Navigate to last element of array of tables
-                        if (existing.array.items.len == 0) {
+                        if (existing.array.items.items.len == 0) {
                             self.parse_error = err.makeError(.UnexpectedToken, pos, "empty array in path");
                             return error.ParseFailed;
                         }
@@ -217,7 +211,7 @@ pub const Parser = struct {
                             self.parse_error = err.makeError(.TableRedefined, pos, "cannot extend tables in static array");
                             return error.ParseFailed;
                         }
-                        current = existing.array.items[existing.array.items.len - 1];
+                        current = existing.array.items.items[existing.array.items.items.len - 1];
                     } else if (existing.* == .table) {
                         // Cannot extend inline tables
                         if (existing.table.is_inline) {
@@ -283,13 +277,7 @@ pub const Parser = struct {
         // Navigate to the correct table for dotted keys
         var target = table;
         for (path.items[0 .. path.items.len - 1]) |key| {
-            var found: ?*Value = null;
-            for (target.table.entries) |entry| {
-                if (std.mem.eql(u8, entry.key, key)) {
-                    found = entry.value;
-                    break;
-                }
-            }
+            const found: ?*Value = target.table.map.get(key);
 
             if (found) |existing| {
                 if (existing.* != .table) {
@@ -533,7 +521,7 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        return Value{ .array = .{ .items = try items.toOwnedSlice(alloc), .is_static = true } };
+        return Value{ .array = .{ .items = items, .is_static = true } };
     }
 
     fn parseNestedArrayFromDoubleBracket(self: *Parser, alloc: Allocator) ParseValueError!Value {
@@ -593,7 +581,7 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        return Value{ .array = .{ .items = try outer_items.toOwnedSlice(alloc), .is_static = true } };
+        return Value{ .array = .{ .items = outer_items, .is_static = true } };
     }
 
     fn parseArrayContents(self: *Parser, alloc: Allocator) ParseValueError!Value {
@@ -642,7 +630,7 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        return Value{ .array = .{ .items = try items.toOwnedSlice(alloc), .is_static = true } };
+        return Value{ .array = .{ .items = items, .is_static = true } };
     }
 
     fn parseInlineTable(self: *Parser, alloc: Allocator) ParseValueError!Value {
@@ -775,7 +763,16 @@ pub const Parser = struct {
         }
         self.current = try self.nextToken();
 
-        return Value{ .table = .{ .entries = try entries.toOwnedSlice(alloc), .is_inline = true, .is_closed_inline = true } };
+        // Convert the scratch entries list into the hash-indexed map
+        // form. Task 6 in the plan folds the dup-check into the insert
+        // and removes this final conversion pass.
+        var map: std.StringArrayHashMapUnmanaged(*Value) = .{};
+        errdefer map.deinit(alloc);
+        try map.ensureTotalCapacity(alloc, @intCast(entries.items.len));
+        for (entries.items) |e| {
+            map.putAssumeCapacity(e.key, e.value);
+        }
+        return Value{ .table = .{ .map = map, .is_inline = true, .is_closed_inline = true } };
     }
 
     fn mergeTables(alloc: Allocator, target: *Value, source: *Value) error{ ParseFailed, OutOfMemory }!void {
@@ -784,20 +781,17 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        for (source.table.entries) |src_entry| {
-            var found = false;
-            for (target.table.entries) |*tgt_entry| {
-                if (std.mem.eql(u8, tgt_entry.key, src_entry.key)) {
-                    // Both values must be tables to merge
-                    if (tgt_entry.value.* != .table or src_entry.value.* != .table) {
-                        return error.ParseFailed;
-                    }
-                    try mergeTables(alloc, tgt_entry.value, src_entry.value);
-                    found = true;
-                    break;
+        // Iterate source in insertion order; O(n) with O(1) per probe
+        // into target instead of the old O(n*m) nested linear scan.
+        var it = val.tableIterator(source);
+        while (it.next()) |src_entry| {
+            if (target.table.map.get(src_entry.key)) |tgt_value| {
+                // Both values must be tables to merge.
+                if (tgt_value.* != .table or src_entry.value.* != .table) {
+                    return error.ParseFailed;
                 }
-            }
-            if (!found) {
+                try mergeTables(alloc, tgt_value, src_entry.value);
+            } else {
                 try val.tableSet(alloc, target, src_entry.key, src_entry.value);
             }
         }

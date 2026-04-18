@@ -210,23 +210,23 @@ test "nested array of tables" {
     defer doc.deinit();
 
     const fruit = doc.root.get("fruit") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 2), fruit.array.items.len);
+    try std.testing.expectEqual(@as(usize, 2), fruit.array.items.items.len);
 
     // First fruit (apple) has 2 varieties
-    const apple = fruit.array.items[0];
+    const apple = fruit.array.items.items[0];
     const apple_name = apple.get("name") orelse unreachable;
     try std.testing.expectEqualStrings("apple", apple_name.string);
 
     const apple_varieties = apple.get("variety") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 2), apple_varieties.array.items.len);
+    try std.testing.expectEqual(@as(usize, 2), apple_varieties.array.items.items.len);
 
     // Second fruit (banana) has 1 variety
-    const banana = fruit.array.items[1];
+    const banana = fruit.array.items.items[1];
     const banana_name = banana.get("name") orelse unreachable;
     try std.testing.expectEqualStrings("banana", banana_name.string);
 
     const banana_varieties = banana.get("variety") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 1), banana_varieties.array.items.len);
+    try std.testing.expectEqual(@as(usize, 1), banana_varieties.array.items.items.len);
 }
 
 test "unicode escapes in strings" {
@@ -311,7 +311,7 @@ test "multiline array" {
     defer doc.deinit();
 
     const arr = doc.root.get("arr") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 3), arr.array.items.len);
+    try std.testing.expectEqual(@as(usize, 3), arr.array.items.items.len);
 }
 
 test "quoted keys" {
@@ -341,10 +341,10 @@ test "empty table" {
     defer doc.deinit();
 
     const empty = doc.root.get("empty") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 0), empty.table.entries.len);
+    try std.testing.expectEqual(@as(usize, 0), toml.value_mod.tableLen(empty));
 
     const another = doc.root.get("another") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 1), another.table.entries.len);
+    try std.testing.expectEqual(@as(usize, 1), toml.value_mod.tableLen(another));
 }
 
 test "max depth limit" {

@@ -105,10 +105,10 @@ test "parse array" {
     defer doc.deinit();
 
     const arr = doc.root.get("arr") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 3), arr.array.items.len);
-    try std.testing.expectEqual(@as(i64, 1), arr.array.items[0].integer);
-    try std.testing.expectEqual(@as(i64, 2), arr.array.items[1].integer);
-    try std.testing.expectEqual(@as(i64, 3), arr.array.items[2].integer);
+    try std.testing.expectEqual(@as(usize, 3), arr.array.items.items.len);
+    try std.testing.expectEqual(@as(i64, 1), arr.array.items.items[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), arr.array.items.items[1].integer);
+    try std.testing.expectEqual(@as(i64, 3), arr.array.items.items[2].integer);
 }
 
 test "parse table" {
@@ -209,10 +209,10 @@ test "parse array of tables" {
     defer doc.deinit();
 
     const products = doc.root.get("products") orelse unreachable;
-    try std.testing.expectEqual(@as(usize, 2), products.array.items.len);
+    try std.testing.expectEqual(@as(usize, 2), products.array.items.items.len);
 
-    const hammer = products.array.items[0].get("name") orelse unreachable;
-    const nail = products.array.items[1].get("name") orelse unreachable;
+    const hammer = products.array.items.items[0].get("name") orelse unreachable;
+    const nail = products.array.items.items[1].get("name") orelse unreachable;
 
     try std.testing.expectEqualStrings("Hammer", hammer.string);
     try std.testing.expectEqualStrings("Nail", nail.string);

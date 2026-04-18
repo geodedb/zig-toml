@@ -92,7 +92,8 @@ pub fn main() !void {
 
     // Iterate over table entries
     try stdout.print("All top-level keys:\n", .{});
-    for (doc.root.table.entries) |entry| {
+    var it = toml.value_mod.tableIterator(doc.root);
+    while (it.next()) |entry| {
         const type_name = switch (entry.value.*) {
             .table => "table",
             .array => "array",
