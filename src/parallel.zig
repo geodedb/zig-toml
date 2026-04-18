@@ -402,51 +402,59 @@ pub fn extractKeys(
 }
 
 fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyExtractResult {
-    var keys: std.ArrayList(u8) = .empty;
-    defer keys.deinit(allocator);
-    var count: usize = 0;
-    var line_start: usize = 0;
+    // Use an inner arena so the parser's allocations are freed on return
+    // regardless of success/failure. We copy top-level key strings into
+    // the caller-provided allocator before the arena is drained.
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const parse_alloc = arena.allocator();
 
-    for (input, 0..) |c, i| {
-        if (c == '\n' or i == input.len - 1) {
-            const line_end = if (c == '\n') i else i + 1;
-            const line = input[line_start..line_end];
-
-            // Skip empty lines and comments
-            var trimmed_start: usize = 0;
-            while (trimmed_start < line.len and (line[trimmed_start] == ' ' or line[trimmed_start] == '\t')) {
-                trimmed_start += 1;
-            }
-            if (trimmed_start < line.len and line[trimmed_start] != '#' and line[trimmed_start] != '[') {
-                // Look for = sign
-                if (std.mem.indexOf(u8, line, "=")) |eq_pos| {
-                    const key = std.mem.trim(u8, line[0..eq_pos], " \t");
-                    if (key.len > 0) {
-                        if (count > 0) {
-                            keys.append(allocator, ',') catch {
-                                return .{ .keys = null, .count = 0, .success = false };
-                            };
-                        }
-                        keys.appendSlice(allocator, key) catch {
+    const r = toml.parseWithError(parse_alloc, input, .{});
+    switch (r) {
+        .err => {
+            return .{ .keys = null, .count = 0, .success = false };
+        },
+        .ok => |doc_val| {
+            // doc_val owns a nested arena inside parse_alloc, but because
+            // the outer arena will reclaim everything we don't call
+            // doc_val.deinit() — same rationale as validateDocument.
+            const root = doc_val.root;
+            switch (root.*) {
+                .table => |t| {
+                    if (t.entries.len == 0) {
+                        return .{ .keys = null, .count = 0, .success = true };
+                    }
+                    var buf: std.ArrayList(u8) = .empty;
+                    errdefer buf.deinit(allocator);
+                    // Capacity hint: total bytes = sum(key_len) + (N-1) commas.
+                    var cap: usize = 0;
+                    for (t.entries) |e| cap += e.key.len;
+                    cap += t.entries.len -| 1;
+                    buf.ensureTotalCapacity(allocator, cap) catch {
+                        return .{ .keys = null, .count = 0, .success = false };
+                    };
+                    for (t.entries, 0..) |e, i| {
+                        if (i > 0) buf.append(allocator, ',') catch {
+                            buf.deinit(allocator);
                             return .{ .keys = null, .count = 0, .success = false };
                         };
-                        count += 1;
+                        buf.appendSlice(allocator, e.key) catch {
+                            buf.deinit(allocator);
+                            return .{ .keys = null, .count = 0, .success = false };
+                        };
                     }
-                }
+                    const owned = buf.toOwnedSlice(allocator) catch {
+                        return .{ .keys = null, .count = 0, .success = false };
+                    };
+                    return .{ .keys = owned, .count = t.entries.len, .success = true };
+                },
+                else => {
+                    // root is always a table per the TOML grammar. Defensive fallback.
+                    return .{ .keys = null, .count = 0, .success = true };
+                },
             }
-            line_start = i + 1;
-        }
+        },
     }
-
-    if (keys.items.len == 0) {
-        return .{ .keys = null, .count = 0, .success = true };
-    }
-
-    return .{
-        .keys = keys.toOwnedSlice(allocator) catch null,
-        .count = count,
-        .success = true,
-    };
 }
 
 // ============================================================================
