@@ -7,8 +7,9 @@ Source of truth: GitLab issue tracker. This file mirrors the tracker for open ga
 
 Catalog: originally 21 open gaps. Post-closure status:
 
-- Fully closed: GAP-0002, GAP-0003, GAP-0005, GAP-0010, GAP-0021
-- Still open: 16 items
+- Fully closed: GAP-0002, GAP-0003, GAP-0005, GAP-0006, GAP-0007,
+  GAP-0008, GAP-0010, GAP-0021
+- Still open: 13 items
 Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ## Gaps
@@ -72,29 +73,29 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Addressed evidence:** `.gitlab-ci.yml` `.leak-gate` anchor wired into `test`, `test-release-safe`, `test-release-fast`, and `test-release-small`. `CONTRIBUTING.md` documents the gate. Commit `b62f27e`.
 - **Outstanding:** None for the in-tree testing surface. valgrind / ASan / TSan coverage of non-test code paths is tracked as a future enhancement under the umbrella issue #42 (Q-16) but is out of scope for REQ-18 as originally defined.
 
-### GAP-0006: TOML encoder not implemented -- CLOSED
+### GAP-0006: TOML encoder not implemented
 
+- **Status:** Closed -- commit `1e731ed` (2026-04-18). Moved to `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Issue:** [#6](https://gitlab.com/devnw/zig/toml/-/issues/6)
 - **Category:** Feature
 - **Severity:** High
 - **Requirement source:** REQ-06.
-- **Addressed evidence:** `src/encoder.zig` (Plan 06) implements `encode(doc, writer, options)` with full coverage of integers, floats, booleans, strings, datetimes, inline arrays, inline tables, header tables, and arrays-of-tables. Round-trip corpus at `tests/encoder_roundtrip.zig` (50 cases) verifies parse -> encode -> parse equivalence via tagged-JSON projection. Public API wiring in `src/toml.zig` exposes `toml.encode` and `toml.EncodeOptions`.
-- **Outstanding:** toml-test encoder CLI binary (`GAP-0007`) still open; it is the command-line harness, not the encoder itself.
+- **Addressed evidence:** `src/encoder.zig` (Plan 06) implements `encode(doc, writer, options)` with full coverage of integers, floats, booleans, strings, datetimes, inline arrays, inline tables, header tables, and arrays-of-tables. Round-trip corpus at `tests/encoder_roundtrip.zig` verifies parse -> encode -> parse equivalence via tagged-JSON projection. Public API wiring in `src/toml.zig` exposes `toml.encode` and `toml.EncodeOptions`.
+- **Outstanding:** None. The toml-test encoder CLI harness is tracked under GAP-0007 (also closed).
 
 ### GAP-0007: Encoder CLI not implemented
 
+- **Status:** Closed -- commit `148d790` (2026-04-18). Moved to `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Issue:** [#7](https://gitlab.com/devnw/zig/toml/-/issues/7)
 - **Category:** Feature
 - **Severity:** High
 - **Requirement source:** REQ-07.
-- **Current state (evidence):** No `toml-test-encoder` binary target.
-- **Why this is a gap:** Required to run the toml-test encoder suite.
-- **Impact/Risk:** Blocks GAP-0004 and GAP-0006 validation.
-- **Recommended fix:** Add `src/bin/toml-test-encoder.zig` and a `build.zig` install step.
-- **Acceptance criteria:** Binary reads tagged JSON from stdin, writes TOML to stdout; passes toml-test encoder suite.
+- **Resolution:** `src/bin/toml_test_encoder.zig` reads toml-test tagged JSON from stdin and emits TOML via `src/encoder_cli.zig` (`jsonToValue` + `runEncodePipeline`) on stdout. `build.zig` installs the binary alongside `toml-test-decoder`. GitLab CI `toml-test-conformance` stage wires both CLIs into the BurntSushi/toml-test harness (allow_failure until pass-rate is stable; flip tracked under GAP-0004).
+- **Resolution evidence:** `src/bin/toml_test_encoder.zig`, `src/encoder_cli.zig`, `.gitlab-ci.yml` `toml-test-conformance` job, commit `148d790`.
 
-### GAP-0008: Pretty-print / stable-sort output formatting missing -- CLOSED
+### GAP-0008: Pretty-print / stable-sort output formatting missing
 
+- **Status:** Closed -- commit `1e731ed` (2026-04-18). Moved to `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Issue:** [#8](https://gitlab.com/devnw/zig/toml/-/issues/8)
 - **Category:** Feature
 - **Severity:** High

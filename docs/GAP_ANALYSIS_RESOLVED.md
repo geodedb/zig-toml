@@ -8,10 +8,72 @@ Entry format: `<ID> | <Title> | Closing commit | Resolution date | Evidence`.
 
 ### Fully closed
 
-| Gap-ID | Title | Closing plan | Resolved | Evidence |
-|--------|-------|--------------|----------|----------|
-| GAP-0006 | TOML encoder not implemented | Plan 06 (`feat/encoder-suite`) | 2026-04-18 | `src/encoder.zig` full value-kind coverage; `tests/encoder_roundtrip.zig` 50-case corpus; `toml.encode` / `toml.EncodeOptions` public API |
-| GAP-0008 | Pretty-print / stable-sort output formatting missing | Plan 06 (`feat/encoder-suite`) | 2026-04-18 | `EncodeOptions` sort_keys/indent/inline_threshold; `tests/encoder_golden.zig` byte-exact contract |
+| Gap-ID | Title | Closing commit | Resolved | Evidence |
+|--------|-------|----------------|----------|----------|
+| GAP-0006 | TOML encoder not implemented | `1e731ed` | 2026-04-18 | `src/encoder.zig` full value-kind coverage; `tests/encoder_roundtrip.zig` round-trip corpus; `toml.encode` / `toml.EncodeOptions` public API |
+| GAP-0007 | Encoder CLI not implemented | `148d790` | 2026-04-18 | `src/bin/toml_test_encoder.zig` + `src/encoder_cli.zig`; `build.zig` install step; `.gitlab-ci.yml` `toml-test-conformance` stage (allow_failure) |
+| GAP-0008 | Pretty-print / stable-sort output formatting missing | `1e731ed` | 2026-04-18 | `EncodeOptions` sort_keys/indent/inline_threshold; `tests/encoder_golden.zig` byte-exact contract |
+
+### Detailed entries
+
+#### GAP-0006: TOML encoder not implemented
+
+- **Status:** Closed -- commit `1e731ed` (2026-04-18). Moved from
+  `docs/GAP_ANALYSIS.md`.
+- **Issue:** [#6](https://gitlab.com/devnw/zig/toml/-/issues/6)
+- **Category:** Feature
+- **Severity:** High
+- **Requirement source:** REQ-06.
+- **Resolution:** `src/encoder.zig` implements
+  `encode(doc, writer, options)` with full coverage of every TOML v1
+  value kind. Round-trip corpus in `tests/encoder_roundtrip.zig`
+  asserts `parse(encode(parse(x)))` yields the same tagged-JSON
+  projection as `parse(x)`.
+- **Resolution evidence:** `src/encoder.zig`,
+  `tests/encoder_roundtrip.zig`, `tests/encoder_golden.zig`,
+  commit `1e731ed`.
+- **Outstanding:** toml-test conformance CI job is in place as
+  `allow_failure: true`; flipping to required is tracked under
+  GAP-0004.
+
+#### GAP-0007: Encoder CLI not implemented
+
+- **Status:** Closed -- commit `148d790` (2026-04-18). Moved from
+  `docs/GAP_ANALYSIS.md`.
+- **Issue:** [#7](https://gitlab.com/devnw/zig/toml/-/issues/7)
+- **Category:** Feature
+- **Severity:** High
+- **Requirement source:** REQ-07.
+- **Resolution:** `src/bin/toml_test_encoder.zig` reads toml-test
+  tagged JSON from stdin and emits TOML via
+  `src/encoder_cli.zig` (`jsonToValue` + `runEncodePipeline`) on
+  stdout. `build.zig` installs the binary alongside
+  `toml-test-decoder`. GitLab CI `toml-test-conformance` stage pairs
+  the two CLIs to drive the BurntSushi/toml-test harness
+  (allow_failure until pass-rate is stable).
+- **Resolution evidence:** `src/bin/toml_test_encoder.zig`,
+  `src/encoder_cli.zig`, `.gitlab-ci.yml` `toml-test-conformance`
+  job, commit `148d790`.
+- **Outstanding:** Flipping the conformance gate from
+  `allow_failure: true` to required is tracked under GAP-0004.
+
+#### GAP-0008: Pretty-print / stable-sort output formatting missing
+
+- **Status:** Closed -- commit `1e731ed` (2026-04-18). Moved from
+  `docs/GAP_ANALYSIS.md`.
+- **Issue:** [#8](https://gitlab.com/devnw/zig/toml/-/issues/8)
+- **Category:** Feature
+- **Severity:** High
+- **Requirement source:** REQ-08.
+- **Resolution:** `EncodeOptions` exposes `sort_keys` (default
+  `true`), `indent` (default `0`), and `inline_threshold` (default
+  `8`). `sort_keys=true` sorts keys byte-order at every nesting
+  level; `indent > 0` wraps inline arrays longer than
+  `inline_threshold` across indented lines with one item per line.
+- **Resolution evidence:** `src/encoder.zig` (options plumbing),
+  `tests/encoder_golden.zig` (byte-exact output locks), commit
+  `1e731ed`.
+- **Outstanding:** None.
 
 ## Phase 5 closure batch (2026-04-18, commits 037a918..befaff0)
 
