@@ -325,6 +325,7 @@ test "U-R malformed timezone hours rejected" {
 
 test "U-R malformed fractional seconds rejected" {
     // `.` followed by zero digits used to silently become 0; must now error.
+    // Q-3: assert structurally -- the .err branch must carry position info.
     const input = "t = 10:30:00.\n";
     const result = parseWithError(std.testing.allocator, input, .{});
     switch (result) {
@@ -332,7 +333,11 @@ test "U-R malformed fractional seconds rejected" {
             doc.deinit();
             try std.testing.expect(false);
         },
-        .err => {},
+        .err => |e| {
+            try std.testing.expect(e.line == 1);
+            try std.testing.expect(e.column >= 1);
+            try std.testing.expect(e.message.len > 0);
+        },
     }
 }
 
