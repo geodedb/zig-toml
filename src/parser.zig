@@ -95,11 +95,8 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser) !*Document {
-        // UTF-8 validation (against the caller's original buffer).
-        if (!std.unicode.utf8ValidateSlice(self.input)) {
-            self.parse_error = err.makeError(.InvalidUtf8, .{}, "input is not valid UTF-8");
-            return error.ParseFailed;
-        }
+        // UTF-8 validation is now fused into Lexer.advance() so we avoid
+        // a full second pass over the input. See src/lexer.zig:advance.
 
         // Size limit check.
         if (self.input.len > self.options.max_bytes) {

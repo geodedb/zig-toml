@@ -61,6 +61,7 @@ pub const Lexer = struct {
     pos: Position,
     version: TomlVersion,
     parse_error: ?ParseError,
+    utf8_error: bool,
 
     pub fn init(input: []const u8, version: TomlVersion) Lexer {
         return .{
@@ -68,6 +69,7 @@ pub const Lexer = struct {
             .pos = .{},
             .version = version,
             .parse_error = null,
+            .utf8_error = false,
         };
     }
 
@@ -176,7 +178,7 @@ pub const Lexer = struct {
 
         // Boolean or bare key
         if (isBareKeyChar(c)) {
-            return self.lexBareKeyOrBool();
+            return try self.lexBareKeyOrBool();
         }
 
         self.parse_error = err.makeError(.UnexpectedToken, start_pos, "unexpected character");
@@ -202,7 +204,7 @@ pub const Lexer = struct {
                 self.parse_error = err.makeError(.InvalidControlCharacter, self.pos, "control character not allowed in comment");
                 return error.ParseFailed;
             }
-            self.advance();
+            try self.tryAdvance();
         }
         return Token{
             .tag = .comment,
@@ -231,7 +233,7 @@ pub const Lexer = struct {
             if (c == '\\') {
                 self.advance();
                 if (self.pos.byte_index < self.input.len) {
-                    self.advance(); // skip escaped char
+                    try self.tryAdvance(); // skip escaped char (may be non-ASCII)
                 }
             } else if (c == '\n') {
                 self.parse_error = err.makeError(.UnterminatedString, start_pos, "newline in basic string");
@@ -240,7 +242,7 @@ pub const Lexer = struct {
                 self.parse_error = err.makeError(.InvalidControlCharacter, self.pos, "control character must be escaped in basic string");
                 return error.ParseFailed;
             } else {
-                self.advance();
+                try self.tryAdvance();
             }
         }
 
@@ -285,7 +287,7 @@ pub const Lexer = struct {
             if (c == '\\') {
                 self.advance();
                 if (self.pos.byte_index < self.input.len) {
-                    self.advance();
+                    try self.tryAdvance();
                 }
             } else if (c == '\r') {
                 // Check for bare CR (CR not followed by LF)
@@ -299,7 +301,7 @@ pub const Lexer = struct {
                 self.parse_error = err.makeError(.InvalidControlCharacter, self.pos, "control character must be escaped in multiline string");
                 return error.ParseFailed;
             } else {
-                self.advance();
+                try self.tryAdvance();
             }
         }
 
@@ -331,7 +333,7 @@ pub const Lexer = struct {
                 self.parse_error = err.makeError(.InvalidControlCharacter, self.pos, "control character not allowed in literal string");
                 return error.ParseFailed;
             }
-            self.advance();
+            try self.tryAdvance();
         }
 
         self.parse_error = err.makeError(.UnterminatedString, start_pos, "unterminated literal string");
@@ -383,7 +385,7 @@ pub const Lexer = struct {
                 self.parse_error = err.makeError(.InvalidControlCharacter, self.pos, "control character not allowed in multiline literal string");
                 return error.ParseFailed;
             } else {
-                self.advance();
+                try self.tryAdvance();
             }
         }
 
@@ -559,12 +561,12 @@ pub const Lexer = struct {
         };
     }
 
-    fn lexBareKeyOrBool(self: *Lexer) Token {
+    fn lexBareKeyOrBool(self: *Lexer) !Token {
         const start = self.pos.byte_index;
         const start_pos = self.pos;
 
         while (self.pos.byte_index < self.input.len and isBareKeyChar(self.peek())) {
-            self.advance();
+            try self.tryAdvance();
         }
 
         const text = self.input[start..self.pos.byte_index];
@@ -618,10 +620,30 @@ pub const Lexer = struct {
         return self.input[idx];
     }
 
+    fn tryAdvance(self: *Lexer) !void {
+        self.advance();
+        if (self.utf8_error) return error.ParseFailed;
+    }
+
     fn advance(self: *Lexer) void {
-        if (self.pos.byte_index < self.input.len) {
-            self.pos.advance(self.input[self.pos.byte_index]);
+        if (self.pos.byte_index >= self.input.len) return;
+        const b = self.input[self.pos.byte_index];
+        if (b < 0x80) {
+            self.pos.advance(b);
+            return;
         }
+        // Multibyte UTF-8 start byte: validate the full sequence at the
+        // current byte. On error, stash the diagnostic and leave `pos`
+        // at the offending byte so the caller surfaces line/col there.
+        const len = validateUtf8CodePoint(self.input, self.pos.byte_index) catch {
+            self.parse_error = err.makeError(.InvalidUtf8, self.pos, "invalid UTF-8 sequence");
+            self.utf8_error = true;
+            return;
+        };
+        // Valid sequence: consume all `len` bytes. Position counts the
+        // codepoint as one column; byte_index still advances by len.
+        self.pos.byte_index += len;
+        self.pos.column += 1;
     }
 };
 
@@ -638,6 +660,62 @@ fn isBareKeyChar(c: u8) bool {
         (c >= 'A' and c <= 'Z') or
         (c >= '0' and c <= '9') or
         c == '_' or c == '-';
+}
+
+/// Validate a UTF-8 codepoint that begins at `input[index]` when the
+/// leading byte has the high bit set. Returns the byte length of the
+/// sequence (2, 3, or 4). Returns `error.InvalidUtf8` for orphan
+/// continuation bytes, overlong forms, truncated tails, surrogates, and
+/// codepoints above U+10FFFF.
+fn validateUtf8CodePoint(input: []const u8, index: usize) !u3 {
+    const first = input[index];
+
+    // Leading byte must not be a continuation byte and must not be one
+    // of the five-or-more-byte patterns that were never valid UTF-8.
+    if (first < 0x80) return 1; // ASCII: caller should not normally hit this.
+
+    // 2-byte: 110xxxxx 10xxxxxx  (U+0080 .. U+07FF)
+    if (first & 0xE0 == 0xC0) {
+        if (first < 0xC2) return error.InvalidUtf8; // overlong
+        if (index + 1 >= input.len) return error.InvalidUtf8;
+        const b1 = input[index + 1];
+        if (b1 & 0xC0 != 0x80) return error.InvalidUtf8;
+        return 2;
+    }
+
+    // 3-byte: 1110xxxx 10xxxxxx 10xxxxxx  (U+0800 .. U+FFFF, excluding surrogates)
+    if (first & 0xF0 == 0xE0) {
+        if (index + 2 >= input.len) return error.InvalidUtf8;
+        const b1 = input[index + 1];
+        const b2 = input[index + 2];
+        if (b1 & 0xC0 != 0x80) return error.InvalidUtf8;
+        if (b2 & 0xC0 != 0x80) return error.InvalidUtf8;
+        // Reject overlong: E0 80..9F is an overlong encoding of a 2-byte scalar.
+        if (first == 0xE0 and b1 < 0xA0) return error.InvalidUtf8;
+        // Reject surrogates: ED A0..BF encodes U+D800..U+DFFF.
+        if (first == 0xED and b1 >= 0xA0) return error.InvalidUtf8;
+        return 3;
+    }
+
+    // 4-byte: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx  (U+10000 .. U+10FFFF)
+    if (first & 0xF8 == 0xF0) {
+        if (first > 0xF4) return error.InvalidUtf8; // > U+10FFFF
+        if (index + 3 >= input.len) return error.InvalidUtf8;
+        const b1 = input[index + 1];
+        const b2 = input[index + 2];
+        const b3 = input[index + 3];
+        if (b1 & 0xC0 != 0x80) return error.InvalidUtf8;
+        if (b2 & 0xC0 != 0x80) return error.InvalidUtf8;
+        if (b3 & 0xC0 != 0x80) return error.InvalidUtf8;
+        // Reject overlong: F0 80..8F is an overlong encoding of a 3-byte scalar.
+        if (first == 0xF0 and b1 < 0x90) return error.InvalidUtf8;
+        // Reject > U+10FFFF: F4 90..BF is above the Unicode range.
+        if (first == 0xF4 and b1 >= 0x90) return error.InvalidUtf8;
+        return 4;
+    }
+
+    // Orphan continuation byte (10xxxxxx) or reserved leading byte (0xF5..0xFF).
+    return error.InvalidUtf8;
 }
 
 fn containsTimezone(text: []const u8) bool {

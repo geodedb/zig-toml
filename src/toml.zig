@@ -467,3 +467,93 @@ test "parseInlineTable: v1.1 accepts newline inside" {
     const b = t.get("b") orelse unreachable;
     try std.testing.expectEqual(@as(i64, 2), b.integer);
 }
+
+test "invalid UTF-8 in middle of line reports precise line/column" {
+    // Three lines; bad byte is at line 3, column 7 (the 0xff byte).
+    // Layout (each '\n' advances line):
+    //   "a = 1\n"      line 1
+    //   "b = 2\n"      line 2
+    //   "c = \"X\xffY\"\n"   line 3, col 7 is \xff
+    const input = "a = 1\nb = 2\nc = \"X\xffY\"\n";
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| {
+            try std.testing.expectEqual(ErrorCode.InvalidUtf8, e.code);
+            try std.testing.expectEqual(@as(u32, 3), e.line);
+            try std.testing.expectEqual(@as(u32, 7), e.column);
+        },
+    }
+}
+
+test "2-byte UTF-8 in basic string parses" {
+    const input = "name = \"caf\u{00E9}\"\n"; // é = 0xC3 0xA9
+    var doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+    const name = doc.root.get("name") orelse unreachable;
+    try std.testing.expectEqualStrings("caf\u{00E9}", name.string);
+}
+
+test "3-byte UTF-8 in literal string parses" {
+    const input = "sym = 'price \u{20AC}'\n"; // € = 0xE2 0x82 0xAC
+    var doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+    const sym = doc.root.get("sym") orelse unreachable;
+    try std.testing.expectEqualStrings("price \u{20AC}", sym.string);
+}
+
+test "4-byte UTF-8 in multiline basic string parses" {
+    // 𝄞 (MUSICAL SYMBOL G CLEF) = U+1D11E = F0 9D 84 9E
+    const input = "note = \"\"\"clef \u{1D11E}\"\"\"\n";
+    var doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+    const note = doc.root.get("note") orelse unreachable;
+    try std.testing.expectEqualStrings("clef \u{1D11E}", note.string);
+}
+
+test "orphan UTF-8 continuation byte rejected with position" {
+    // 0x80 is a continuation byte; it may not appear as a leading byte.
+    const input = "k = \"\x80\"\n";
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| {
+            try std.testing.expectEqual(ErrorCode.InvalidUtf8, e.code);
+            try std.testing.expectEqual(@as(u32, 1), e.line);
+            // Column 6: k, space, =, space, ", \x80
+            try std.testing.expectEqual(@as(u32, 6), e.column);
+        },
+    }
+}
+
+test "overlong UTF-8 rejected" {
+    // 0xC0 0xAF is an overlong encoding of '/' (U+002F).
+    const input = "k = \"\xC0\xAF\"\n";
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| try std.testing.expectEqual(ErrorCode.InvalidUtf8, e.code),
+    }
+}
+
+test "invalid UTF-8 start byte rejected" {
+    // 0xFE / 0xFF are never valid UTF-8 start bytes.
+    const input = "k = \"\xFE\xFF\"\n";
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| try std.testing.expectEqual(ErrorCode.InvalidUtf8, e.code),
+    }
+}
