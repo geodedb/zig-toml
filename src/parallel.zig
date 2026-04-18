@@ -115,6 +115,14 @@ const ParseChunk = struct {
     results: []ParseResult,
 };
 
+// Each call to parseDocument asks toml.parseWithError to build a
+// private ArenaAllocator seeded from chunk.allocator. The caller's
+// allocator is only ever reached via alloc/free on arena pages, which
+// std.mem.Allocator implementations (including std.testing.allocator
+// and std.heap.GeneralPurposeAllocator with thread_safe=true) guarantee
+// to be safe for concurrent access. The per-result Document therefore
+// owns a distinct arena whose lifetime ends when the caller calls
+// result.doc.?.deinit().
 fn parseChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
     const chunk: *ParseChunk = @ptrCast(@alignCast(ctx_ptr));
     for (chunk.inputs, 0..) |input, i| {
