@@ -8,12 +8,25 @@
 //! On failure: prints one-line diagnostic to stderr, exits 1.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const toml = @import("toml");
 
 pub fn main(init: std.process.Init) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // In Debug builds use the DebugAllocator so the toml-test harness
+    // surfaces any parser leaks. In release builds (ReleaseSafe/Fast/Small)
+    // swap to the SMP allocator, which is an order of magnitude cheaper
+    // per-allocation and has no leak-tracking overhead that would distort
+    // runtime benchmarks or CLI startup latency. It also avoids leaking
+    // allocation metadata into diagnostic output (CWE-209).
+    var debug_gpa: std.heap.DebugAllocator(.{}) =
+        if (builtin.mode == .Debug) .init else undefined;
+    defer if (builtin.mode == .Debug) {
+        _ = debug_gpa.deinit();
+    };
+    const allocator: std.mem.Allocator = if (builtin.mode == .Debug)
+        debug_gpa.allocator()
+    else
+        std.heap.smp_allocator;
 
     const io = init.io;
 
