@@ -388,6 +388,10 @@ test "U-H deep nested inline tables rejected" {
 test "parallel re-export is reachable" {
     // Smoke test: verify parallel.zig is reachable through the public
     // toml root module and the batch parse entry point works end-to-end.
+    const allocator = std.testing.allocator;
+    var ctx = try parallel.ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{
         "a = 1\n",
         "b = 2\n",
@@ -395,11 +399,8 @@ test "parallel re-export is reachable" {
         "d = 4\n",
     };
     var results: [4]parallel.ParseResult = undefined;
-    parallel.parseDocuments(std.testing.allocator, &inputs, &results);
-    defer {
-        for (&results) |*r| if (r.doc) |d| d.deinit();
-        parallel.deinitPool();
-    }
+    ctx.parseDocuments(&inputs, &results);
+    defer for (&results) |*r| if (r.doc) |d| d.deinit();
 
     for (results) |r| {
         try std.testing.expect(r.success);
