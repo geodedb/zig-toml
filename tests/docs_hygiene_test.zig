@@ -14,6 +14,7 @@
 const std = @import("std");
 
 const ARCH_PATH = "docs/ARCHITECTURE.md";
+const CHANGELOG_PATH = "CHANGELOG.md";
 
 fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     // Zig 0.16: file I/O goes through the Io dispatch in std.testing.io.
@@ -88,6 +89,78 @@ test "ARCHITECTURE.md documents parallel subsystem wrapping real parser" {
     for (required) |needle| {
         if (std.mem.indexOf(u8, body, needle) == null) {
             std.debug.print("missing '{s}' in {s}\n", .{ needle, ARCH_PATH });
+            try std.testing.expect(false);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// CHANGELOG.md -- reconciliation guards (Q-11)
+// ---------------------------------------------------------------------
+
+test "CHANGELOG mentions every released tag" {
+    const allocator = std.testing.allocator;
+    const body = try readFile(allocator, CHANGELOG_PATH);
+    defer allocator.free(body);
+
+    // Every git tag in this repo must have a heading in the changelog.
+    // Keep this array in sync with `git tag -l`. 0.2.0 is the current
+    // in-flight release target documented in the file; it will be
+    // tagged after this plan lands.
+    const required_tags = [_][]const u8{
+        "[0.1.0]",
+        "[0.1.1]",
+        "[0.2.0]",
+    };
+    for (required_tags) |tag| {
+        if (std.mem.indexOf(u8, body, tag) == null) {
+            std.debug.print("missing '{s}' in {s}\n", .{ tag, CHANGELOG_PATH });
+            try std.testing.expect(false);
+        }
+    }
+}
+
+test "CHANGELOG release dates match git history" {
+    const allocator = std.testing.allocator;
+    const body = try readFile(allocator, CHANGELOG_PATH);
+    defer allocator.free(body);
+
+    // v0.1.0 was tagged 2026-01-24; v0.1.1 was tagged 2026-01-26.
+    // 0.2.0 is dated 2026-04-18 in the changelog (in-flight release
+    // target tracked before the tag is cut).
+    const required = [_][]const u8{
+        "## [0.1.0] - 2026-01-24",
+        "## [0.1.1] - 2026-01-26",
+        "## [0.2.0] - 2026-04-18",
+    };
+    for (required) |needle| {
+        if (std.mem.indexOf(u8, body, needle) == null) {
+            std.debug.print("missing '{s}' in {s}\n", .{ needle, CHANGELOG_PATH });
+            try std.testing.expect(false);
+        }
+    }
+}
+
+test "CHANGELOG credits the 0.2.0 audit closures" {
+    const allocator = std.testing.allocator;
+    const body = try readFile(allocator, CHANGELOG_PATH);
+    defer allocator.free(body);
+
+    // 0.2.0 is the first release to ship the parallel subsystem riding
+    // on the real parser, the ParallelContext API, the leak-check CI
+    // gate, and the ResourceLimitExceeded guard. Each must be credited
+    // by ID so a future maintainer can trace what shipped.
+    const required = [_][]const u8{
+        "toml.parallel",
+        "ParallelContext",
+        "leak",
+        "GAP-0005",
+        "GAP-0001",
+        "ResourceLimitExceeded",
+    };
+    for (required) |needle| {
+        if (std.mem.indexOf(u8, body, needle) == null) {
+            std.debug.print("missing '{s}' in {s}\n", .{ needle, CHANGELOG_PATH });
             try std.testing.expect(false);
         }
     }

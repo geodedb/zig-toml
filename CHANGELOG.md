@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-01-26
+
+### Changed
+
+- CI: added the `release-semantic` ci-catalog component and
+  company-tagged runner configuration so automated releases fire on
+  tagged pushes. This closes the gap between the repo settings and
+  the actual tag v0.1.1 that was cut on 2026-01-26.
+
 ## [0.2.0] - 2026-04-18
 
 ### Changed (BREAKING)
@@ -99,15 +108,31 @@ defer doc.deinit();
 
 - Real coverage-guided fuzz harness (`tests/fuzz_parse.zig`) wired into
   `zig build test --fuzz`. The GitLab CI `fuzz` stage now exercises a
-  real target instead of a no-op.
+  real target instead of a no-op. (GAP-0003)
 - Defense-in-depth recursion guards (`enterDepth` / `exitDepth`) applied
-  to every recursive-descent entrypoint in the parser.
+  to every recursive-descent entrypoint in the parser. (S-6)
 - `tableIterator`, `tableLen`, `arrayLen`, `arrayItems` helpers in
   `src/value.zig` / re-exported via `toml.value_mod`. Replace direct
   access to the old `table.entries: []TableEntry` field.
 - Performance benchmark harness (`zig build bench`) with hard ceilings
   for 10k top-level keys (<200ms ReleaseFast) and 1000-entry inline
   tables (<50ms ReleaseFast).
+- CI leak-check gate: the GitLab `test` job now tees `zig build test`
+  output and fails on `memory leak detected` / `not freed` banners, on
+  missing `Build Summary` lines (runner aborted), and on summary lines
+  reporting failures. Closes GAP-0005.
+- Parallel-parser negative tests covering duplicate-key, malformed-
+  type, and oversized-batch shapes. (Q-14)
+- TOML spec compliance matrix in `docs/SPEC_COMPLIANCE.md`. (GAP-0021)
+- `docs/ARCHITECTURE.md` Parallel Subsystem section gained an ASCII
+  diagram documenting how `ParallelContext` dispatches batches to
+  per-worker `parseWithError` calls, and explicitly records that the
+  legacy shape-checker has been deleted. Closes GAP-0010 / Q-9.
+- Documentation hygiene tests (`tests/docs_hygiene_test.zig`) that
+  break the build if `docs/ARCHITECTURE.md` drops a source file from
+  the File Structure block, the stale "Stateless Design" phrasing
+  resurfaces, or `CHANGELOG.md` drifts from `git tag -l`. Closes Q-9
+  and Q-11.
 
 ### Fixed
 
@@ -203,5 +228,6 @@ defer doc.deinit();
 - No panics on malformed input
 
 [Unreleased]: https://gitlab.com/devnw/zig/toml/-/compare/v0.2.0...HEAD
-[0.2.0]: https://gitlab.com/devnw/zig/toml/-/compare/v0.1.0...v0.2.0
+[0.2.0]: https://gitlab.com/devnw/zig/toml/-/compare/v0.1.1...v0.2.0
+[0.1.1]: https://gitlab.com/devnw/zig/toml/-/compare/v0.1.0...v0.1.1
 [0.1.0]: https://gitlab.com/devnw/zig/toml/-/releases/v0.1.0
