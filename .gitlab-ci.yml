@@ -92,13 +92,44 @@ build:
     - zig build check
 
 # Unit tests
+#
+# Leak gate: Zig's std.testing.allocator is a `GeneralPurposeAllocator`
+# with leak-checking turned on -- any test that leaks memory will cause
+# the test runner to exit non-zero with a diagnostic. We tee the build
+# output to a log and post-process it to:
+#   1. fail the job on any occurrence of the Zig leak-detector banner
+#      ("memory address 0x.*not freed", "memory leak detected"), and
+#   2. fail the job if the summary line reports any failed tests.
+# This closes the loop so a future change that reintroduces a leak will
+# break main CI instead of silently passing.
 test:
   stage: test
   image: debian:bookworm-slim
   before_script:
     - *install-zig
   script:
-    - zig build test --summary all
+    - set -o pipefail
+    - zig build test --summary all 2>&1 | tee test.log
+    - |
+      if grep -qE "(memory leak detected|not freed)" test.log; then
+        echo "LEAK GATE: Zig test allocator reported leaked allocations." >&2
+        exit 1
+      fi
+    - |
+      if ! grep -qE "Build Summary: [0-9]+/[0-9]+ steps succeeded;" test.log; then
+        echo "LEAK GATE: no Build Summary line -- test runner aborted early." >&2
+        exit 1
+      fi
+    - |
+      if grep -qE "[0-9]+ failed" test.log; then
+        echo "LEAK GATE: test summary reports failures." >&2
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths:
+      - test.log
+    expire_in: 1 week
   needs:
     - build
 
