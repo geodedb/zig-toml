@@ -28,7 +28,7 @@ The zigtoml library is a fully compliant TOML v1.0.0/v1.1.0 parser implemented i
     │           parser.zig              │    │ json_tagged.zig  │
     │  ┌─────────────────────────────┐  │    │                  │
     │  │ Parser                      │  │    │ Tagged JSON      │
-    │  │  - parseDocument()          │  │    │ emitter for      │
+    │  │  - parseDocument() (real)   │  │    │ emitter for      │
     │  │  - parseTableHeader()       │  │    │ toml-test        │
     │  │  - parseKeyValue()          │  │    │                  │
     │  │  - parseValue()             │  │    └──────────────────┘
@@ -412,15 +412,17 @@ src/
 2. Original formatting is lost after parsing
 3. Cannot determine if table was inline vs standard after parsing
 4. No support for preserving key order across operations
-5. `toml.parallel.parseDocuments` is a lightweight shape-checker, not a
-   full parser (see Parallel Subsystem below).
+5. `toml.parallel.parseDocuments` parses with the real recursive-descent
+   parser and emits a `Document` per input (see Parallel Subsystem
+   below).
 
 ## Parallel Subsystem
 
 The `toml.parallel` submodule wraps a `thread_pool` dependency to
 fan out batch operations (parse/validate/extract-keys) across worker
-threads via `submitBatch` + `WaitGroup`. Its job is to pre-filter large
-fan-outs quickly, not to replace `toml.parse`.
+threads via `submitBatch` + `WaitGroup`. Each worker thread invokes the
+real `toml.parseWithError` parser, so the accept/reject decision is
+bit-identical to the serial `toml.parse` path.
 
 ### Components
 
@@ -431,17 +433,21 @@ fan-outs quickly, not to replace `toml.parse`.
   division so every input lands in exactly one chunk, regardless of
   `inputs.len`.
 - Internal per-input routines (`parseDocument`, `validateDocument`,
-  `extractKeysFromDocument`) are byte-level scanners rather than full
-  parser invocations.
+  `extractKeysFromDocument`) are thin wrappers around
+  `toml.parseWithError`.
 
-### Important: Semantic Gap vs `toml.parse`
+### Semantics vs `toml.parse`
 
-The shape-checker inside `parseDocument` accepts many inputs that the
-real parser rejects (duplicate keys, malformed types, illegal
-array-of-tables patterns, etc.). Callers that need strict grammar
-enforcement **must** use `toml.parse`. Future work (`U-A` in the gap
-analysis) will replace the shape-checker with the real parser under
-the same public API.
+`toml.parallel.parseDocuments` is a parallel wrapper around the real
+`toml.parse` parser. Each worker thread runs the full recursive-descent
+parser against its assigned inputs, so the accept/reject decision is
+bit-identical to the serial path. Results carry the parsed `Document`
+so consumers can immediately read values without re-parsing.
+
+The batch entry points (`parseDocuments`, `validateDocuments`,
+`extractKeys`) fall back to sequential execution when input size is
+below their thresholds (4, 8, 8 documents respectively), avoiding
+thread-pool overhead on small batches.
 
 ### Threshold Behavior
 
