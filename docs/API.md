@@ -854,4 +854,71 @@ iterates nested tables and arrays.
 
 ---
 
+## Schema Validation
+
+Since 0.2.0, zigtoml ships two validation styles in `toml.schema`.
+
+### A. Runtime schema
+
+Build a `SchemaNode` tree and validate a parsed `*const Value` against it:
+
+```zig
+const toml = @import("toml");
+
+const port = toml.SchemaNode.N.integer(.{ .min = 1, .max = 65535 });
+const name = toml.SchemaNode.N.string(.{ .min_len = 1 });
+const fields = [_]toml.FieldSchema{
+    .{ .name = "name", .schema = &name, .required = true },
+    .{ .name = "port", .schema = &port, .required = true },
+};
+const validator = toml.SchemaValidator{
+    .root = toml.SchemaNode.N.object(&fields, .strict),
+};
+
+var diags = toml.DiagnosticList.init(alloc);
+defer diags.deinit();
+try validator.validate(doc.root, &diags);
+```
+
+On failure `validate` returns `SchemaError.SchemaViolation` and
+`diags.items.items` contains one `Diagnostic` per violation with a dotted
+`path` (e.g. `server.port`, `tags[2]`), `code`, and `message`.
+
+`SchemaNode` variants: `string`, `integer`, `float`, `boolean`, `datetime`,
+`datetime_local`, `date_local`, `time_local`, `array`, `object`, `one_of`.
+Constructors live on the `SchemaNode.N` sub-namespace because Zig does
+not let a declaration on a union type share a name with one of its tag
+fields.
+
+### B. Comptime-typed decoding
+
+Reflects on a user struct at compile time and allocates the result in a
+caller-owned arena:
+
+```zig
+const Config = struct {
+    name: []const u8,
+    port: u16,
+    tags: ?[][]const u8,
+};
+
+var decoded = try toml.decode(Config, alloc, doc);
+defer decoded.deinit();
+std.debug.print("port={d}\n", .{decoded.value.port});
+```
+
+Supported field types: integers (bounds-checked), floats, bool,
+`[]const u8`, slices of any supported element type, nested structs,
+optional of any supported type. Missing optional fields become `null`;
+struct fields with a default value pick up that default when absent;
+otherwise the decoder returns `DecodeError.MissingField`.
+
+Errors: `DecodeError = error{ TypeMismatch, MissingField,
+IntegerOverflow, UnsupportedType, OutOfMemory }`.
+
+See `examples/schema_validation.zig` for an end-to-end program that
+exercises both styles.
+
+---
+
 API Reference for zigtoml TOML Parser.
