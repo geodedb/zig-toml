@@ -66,6 +66,14 @@ pub const Parser = struct {
         errdefer arena.deinit();
 
         const arena_alloc = arena.allocator();
+
+        // Copy the input into the arena so any slices taken from `self.input`
+        // (keys, literal strings, etc.) remain valid for the full lifetime of
+        // the returned Document, independent of the caller's original buffer.
+        const owned_input = try arena_alloc.dupe(u8, self.input);
+        self.input = owned_input;
+        self.lexer = Lexer.init(owned_input, self.options.version);
+
         const root = try val.createTable(arena_alloc);
 
         // Prime the parser
