@@ -27,6 +27,7 @@ pub const ErrorCode = enum {
     InvalidKey,
     InvalidControlCharacter,
     BareCarriageReturn,
+    ResourceLimitExceeded,
 };
 
 /// Detailed parse error with location information.
