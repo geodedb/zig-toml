@@ -169,7 +169,7 @@ pub const Value = union(ValueTag) {
     };
 
     pub const Array = struct {
-        items: std.ArrayListUnmanaged(*Value) = .empty,
+        items: std.ArrayListUnmanaged(Value) = .empty,
         is_static: bool = false, // true if defined as [] syntax, not [[]]
     };
 
@@ -338,10 +338,28 @@ pub fn tableIterator(table: *const Value) TableIterator {
 }
 
 /// Append a value to an array. O(1) amortized.
-pub fn arrayAppend(alloc: Allocator, array: *Value, value: *Value) !void {
+///
+/// Takes `value` by value: the Value's representation is copied into the
+/// array's contiguous storage. Scalar/table leaves own heap-resident data
+/// (strings, inner table maps) that remains valid because only the thin
+/// tag-plus-payload is moved, not the referenced storage.
+pub fn arrayAppend(alloc: Allocator, array: *Value, value: Value) !void {
     std.debug.assert(array.* == .array);
     const a = &array.array;
     try a.items.append(alloc, value);
+}
+
+/// Append a table to an array-of-tables and return a pointer to the tail
+/// slot so the parser can continue populating the table in place. After
+/// the move to by-value Array storage, the parser cannot keep its
+/// freshly created `*Value` table pointer because the table lives inside
+/// the array's backing slice, not in a standalone heap allocation.
+pub fn arrayAppendTable(alloc: Allocator, array: *Value, table: *Value) !*Value {
+    std.debug.assert(array.* == .array);
+    std.debug.assert(table.* == .table);
+    const a = &array.array;
+    try a.items.append(alloc, table.*);
+    return &a.items.items[a.items.items.len - 1];
 }
 
 /// Return the number of items in an array.
@@ -353,7 +371,7 @@ pub fn arrayLen(array: *const Value) usize {
 }
 
 /// Return the items slice of an array (insertion order).
-pub fn arrayItems(array: *const Value) []const *Value {
+pub fn arrayItems(array: *const Value) []const Value {
     std.debug.assert(array.* == .array);
     return array.array.items.items;
 }

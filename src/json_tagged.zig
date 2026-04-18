@@ -65,9 +65,12 @@ fn writeValue(v: *const Value, writer: anytype) !void {
         },
         .array => |*a| {
             try writer.writeByte('[');
-            for (a.items.items, 0..) |item, i| {
+            // Array items are stored by value (P-10); take address per
+            // slot because writeValue is `*const Value`. The slice
+            // element is addressable so no dupe is needed.
+            for (a.items.items, 0..) |_, i| {
                 if (i > 0) try writer.writeByte(',');
-                try writeValue(item, writer);
+                try writeValue(&a.items.items[i], writer);
             }
             try writer.writeByte(']');
         },

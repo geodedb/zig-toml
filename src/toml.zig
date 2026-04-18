@@ -557,3 +557,18 @@ test "invalid UTF-8 start byte rejected" {
         .err => |e| try std.testing.expectEqual(ErrorCode.InvalidUtf8, e.code),
     }
 }
+
+test "array items are stored by value" {
+    const input = "arr = [10, 20, 30, 40, 50]\n";
+    var doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+
+    const arr = doc.root.get("arr") orelse unreachable;
+    try std.testing.expectEqual(@as(usize, 5), arr.array.items.items.len);
+
+    try std.testing.expectEqual(@as(i64, 10), arr.array.items.items[0].integer);
+    try std.testing.expectEqual(@as(i64, 50), arr.array.items.items[4].integer);
+
+    const Elem = @TypeOf(arr.array.items.items[0]);
+    try std.testing.expect(@typeInfo(Elem) != .pointer);
+}

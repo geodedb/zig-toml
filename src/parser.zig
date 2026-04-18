@@ -216,12 +216,15 @@ pub const Parser = struct {
                             self.parse_error = err.makeError(.ArrayOfTablesConflict, pos, "cannot append to statically defined array");
                             return error.ParseFailed;
                         }
-                        // Create new table and append to array
+                        // Create new table and append to array. After
+                        // P-10 (by-value Array storage) the table lives
+                        // inside the array's slice; `arrayAppendTable`
+                        // returns a pointer to the tail so the parser
+                        // can continue populating it.
                         try self.bumpValues();
                         const new_table = try val.createTable(alloc);
                         new_table.table.defined_explicitly = true;
-                        try val.arrayAppend(alloc, existing, new_table);
-                        return new_table;
+                        return try val.arrayAppendTable(alloc, existing, new_table);
                     } else {
                         // Regular table - must be a table and not already explicitly defined
                         if (existing.* != .table) {
@@ -257,7 +260,10 @@ pub const Parser = struct {
                             self.parse_error = err.makeError(.TableRedefined, pos, "cannot extend tables in static array");
                             return error.ParseFailed;
                         }
-                        current = existing.array.items.items[existing.array.items.items.len - 1];
+                        // Array items are now stored by value (P-10);
+                        // take address of the tail to keep `current` as
+                        // a mutable pointer into the array's storage.
+                        current = &existing.array.items.items[existing.array.items.items.len - 1];
                     } else if (existing.* == .table) {
                         // Cannot extend inline tables
                         if (existing.table.is_inline) {
@@ -281,9 +287,12 @@ pub const Parser = struct {
                     const new_table = try val.createTable(alloc);
                     new_table.table.defined_explicitly = true;
                     new_table.table.is_array_of_tables = true;
-                    try val.arrayAppend(alloc, arr, new_table);
+                    // By-value Array storage (P-10): the freshly created
+                    // table must be reached through its slot inside the
+                    // array, not via the original heap pointer.
+                    const stored_table = try val.arrayAppendTable(alloc, arr, new_table);
                     try val.tableSet(alloc, current, key, arr);
-                    return new_table;
+                    return stored_table;
                 } else {
                     // Create implicit table
                     try self.bumpValues();
@@ -538,14 +547,18 @@ pub const Parser = struct {
 
         // 16-slot initial capacity covers most literal arrays without
         // the ArrayList's doubling ladder (0->8->16 saves two reallocs).
-        var items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
+        // After P-10, items are Value (not *Value) so the parser's
+        // per-element `create(Value)` allocation in parseValue is the
+        // only heap touch per element; elements live contiguously here.
+        var items: std.ArrayListUnmanaged(Value) = .empty;
+        try items.ensureTotalCapacity(alloc, 16);
 
         // Skip whitespace and newlines
         try self.skipArrayWhitespace();
 
         while (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close and self.current.tag != .eof) {
             const item = try self.parseValue(alloc);
-            try items.append(alloc, item);
+            try items.append(alloc, item.*);
 
             try self.skipArrayWhitespace();
 
@@ -590,13 +603,15 @@ pub const Parser = struct {
 
         self.current = try self.nextToken(); // consume [[
 
-        var outer_items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
+        // Items stored by value (P-10): append the inner array Value
+        // directly, without the extra per-element `create(Value)` that
+        // was only needed when the slot type was *Value.
+        var outer_items: std.ArrayListUnmanaged(Value) = .empty;
+        try outer_items.ensureTotalCapacity(alloc, 16);
 
         // Parse the inner array (we're already "inside" it after consuming [[)
         try self.bumpValues();
-        const inner_array = try alloc.create(Value);
-        inner_array.* = try self.parseArrayContents(alloc);
-        try outer_items.append(alloc, inner_array);
+        try outer_items.append(alloc, try self.parseArrayContents(alloc));
 
         // Now continue parsing the outer array (same logic as parseArray after first item)
         try self.skipArrayWhitespace();
@@ -615,7 +630,7 @@ pub const Parser = struct {
             }
 
             const item = try self.parseValue(alloc);
-            try outer_items.append(alloc, item);
+            try outer_items.append(alloc, item.*);
             try self.skipArrayWhitespace();
         }
 
@@ -649,13 +664,15 @@ pub const Parser = struct {
         defer self.exitDepth();
 
         // Parse array contents after the opening [ has been consumed.
-        var items: std.ArrayList(*Value) = try .initCapacity(alloc, 16);
+        // By-value element storage (P-10): collect Value directly.
+        var items: std.ArrayListUnmanaged(Value) = .empty;
+        try items.ensureTotalCapacity(alloc, 16);
 
         try self.skipArrayWhitespace();
 
         while (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close and self.current.tag != .eof) {
             const item = try self.parseValue(alloc);
-            try items.append(alloc, item);
+            try items.append(alloc, item.*);
 
             try self.skipArrayWhitespace();
 

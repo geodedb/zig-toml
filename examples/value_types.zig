@@ -261,14 +261,19 @@ fn printValue(writer: anytype, key: []const u8, value: ?*const toml.Value) !void
 
 fn printArray(writer: anytype, arr: *const toml.Value) !void {
     try writer.print("[", .{});
-    for (toml.value_mod.arrayItems(arr), 0..) |item, i| {
+    // Array items are Values stored in contiguous slice storage (P-10),
+    // so `item` is a `Value` rather than `*Value`. Drop the `.*` on the
+    // switch and use the underlying slice slot address when we need to
+    // pass a pointer into recursive helpers.
+    const slice = toml.value_mod.arrayItems(arr);
+    for (slice, 0..) |item, i| {
         if (i > 0) try writer.print(", ", .{});
-        switch (item.*) {
+        switch (item) {
             .integer => |n| try writer.print("{d}", .{n}),
             .float => |f| try writer.print("{d}", .{f}),
             .string => |s| try writer.print("\"{s}\"", .{s}),
             .bool => |b| try writer.print("{}", .{b}),
-            .array => try printArray(writer, item),
+            .array => try printArray(writer, &slice[i]),
             else => try writer.print("...", .{}),
         }
     }

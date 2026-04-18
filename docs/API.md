@@ -508,7 +508,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
 
 ```zig
 if (doc.root.get("items")) |items| {
-    for (items.array.items) |item| {
+    for (items.array.items.items) |item| {
         const name = item.get("name").?.string;
         const value = item.get("value").?.integer;
         std.debug.print("{s}: {d}\n", .{ name, value });
