@@ -36,10 +36,14 @@ pub const encoder_cli = @import("encoder_cli.zig");
 
 pub const parallel = @import("parallel.zig");
 
+pub const schema = @import("schema.zig");
+pub const SchemaError = schema.SchemaError;
+
 comptime {
     // Force Zig test discovery to walk the encoder + encoder_cli modules.
     _ = encoder;
     _ = encoder_cli;
+    _ = schema;
 }
 
 /// Parse TOML input into a Document.

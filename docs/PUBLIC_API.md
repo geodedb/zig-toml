@@ -35,6 +35,7 @@ const ErrorCode
 const ParseError
 const ParseOptions
 const ParseResult
+const SchemaError
 const TimeLocal
 const TomlVersion
 const Value
@@ -45,6 +46,7 @@ const error_mod
 const json_tagged
 const parallel
 const parser_mod
+const schema
 const value_mod
 fn encode
 fn parse
