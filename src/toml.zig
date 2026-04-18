@@ -304,6 +304,35 @@ test "special floats" {
     try std.testing.expect(std.math.isNan(c.float));
 }
 
+test "U-R malformed timezone hours rejected" {
+    // Lexer accepts the datetime token shape; parser must reject the
+    // non-digit bytes in the TZ offset instead of silently using 0.
+    const input = "dt = 2024-01-15T10:30:00+AB:CD\n";
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |*d| {
+            var doc = @constCast(d);
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => {}, // any parse error is acceptable; 0-silent-accept is not
+    }
+}
+
+test "U-R malformed fractional seconds rejected" {
+    // `.` followed by zero digits used to silently become 0; must now error.
+    const input = "t = 10:30:00.\n";
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |*d| {
+            var doc = @constCast(d);
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => {},
+    }
+}
+
 test "U-H deep nesting rejected by defense-in-depth guards" {
     // Build a TOML document with >max_depth nested arrays. Every recursion
     // entrypoint (parseValue, parseArray, parseArrayContents,

@@ -1373,7 +1373,14 @@ pub const Parser = struct {
                 i += 1;
             }
             const frac_str = raw[frac_start..i];
-            var frac: u32 = std.fmt.parseInt(u32, frac_str, 10) catch 0;
+            if (frac_str.len == 0) {
+                self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid fractional seconds");
+                return error.ParseFailed;
+            }
+            var frac: u32 = std.fmt.parseInt(u32, frac_str, 10) catch {
+                self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid fractional seconds");
+                return error.ParseFailed;
+            };
             // Normalize to nanoseconds
             var digits = frac_str.len;
             while (digits < 9) : (digits += 1) {
@@ -1392,9 +1399,19 @@ pub const Parser = struct {
             } else if (raw[i] == '+' or raw[i] == '-') {
                 const sign: i16 = if (raw[i] == '-') -1 else 1;
                 i += 1;
-                const hours = std.fmt.parseInt(i16, raw[i .. i + 2], 10) catch 0;
+                if (i + 5 > raw.len) {
+                    self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid timezone offset");
+                    return error.ParseFailed;
+                }
+                const hours = std.fmt.parseInt(i16, raw[i .. i + 2], 10) catch {
+                    self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid timezone hours");
+                    return error.ParseFailed;
+                };
                 i += 3; // skip HH:
-                const mins = std.fmt.parseInt(i16, raw[i .. i + 2], 10) catch 0;
+                const mins = std.fmt.parseInt(i16, raw[i .. i + 2], 10) catch {
+                    self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid timezone minutes");
+                    return error.ParseFailed;
+                };
                 // Validate offset
                 if (!isValidOffset(hours, mins)) {
                     self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid timezone offset");
@@ -1478,7 +1495,14 @@ pub const Parser = struct {
                 i += 1;
             }
             const frac_str = raw[frac_start..i];
-            var frac: u32 = std.fmt.parseInt(u32, frac_str, 10) catch 0;
+            if (frac_str.len == 0) {
+                self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid fractional seconds");
+                return error.ParseFailed;
+            }
+            var frac: u32 = std.fmt.parseInt(u32, frac_str, 10) catch {
+                self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid fractional seconds");
+                return error.ParseFailed;
+            };
             var digits = frac_str.len;
             while (digits < 9) : (digits += 1) {
                 frac *= 10;
@@ -1598,7 +1622,14 @@ pub const Parser = struct {
                 i += 1;
             }
             const frac_str = raw[frac_start..i];
-            var frac: u32 = std.fmt.parseInt(u32, frac_str, 10) catch 0;
+            if (frac_str.len == 0) {
+                self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid fractional seconds");
+                return error.ParseFailed;
+            }
+            var frac: u32 = std.fmt.parseInt(u32, frac_str, 10) catch {
+                self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid fractional seconds");
+                return error.ParseFailed;
+            };
             var digits = frac_str.len;
             while (digits < 9) : (digits += 1) {
                 frac *= 10;
