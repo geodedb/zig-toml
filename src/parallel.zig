@@ -643,6 +643,82 @@ test "parallel extract keys - large batch" {
 // division chunk_size previously dropped the tail of the batch. Use a
 // sentinel-initialized results array to catch any unwritten slot. All three
 // parallel entry points (parse/validate/extract) must touch every element.
+// ============================================================================
+// U-M: Differential tests between parallel.parseDocuments (current
+// shape-checker) and toml.parse (real parser). These pin the CURRENT
+// divergent behavior in place so when U-A lands (shape-checker replaced
+// by the real parser) the contract change is visible as a concrete test
+// diff rather than a surprise in consumer code.
+//
+// xfail note: all three inputs below pass the shape-checker today but
+// MUST fail parsing once U-A lands. When updating parallel.parseDocument
+// to call toml.parse, flip these expectations from success=true to
+// success=false and update error_code to the appropriate value.
+// ============================================================================
+
+test "U-M diverges from toml.parse: double equals (xfail: fixed by U-A)" {
+    const allocator = std.testing.allocator;
+    const inputs = [_][]const u8{"a = = 1\n"};
+    var results: [1]ParseResult = undefined;
+
+    parseDocuments(allocator, &inputs, &results);
+
+    // CURRENT behavior: shape-checker sees two `=` signs, no unterminated
+    // strings, no other structural markers -- it returns success.
+    try std.testing.expect(results[0].success);
+    // U-A will make this expect(!results[0].success) with error_code
+    // reflecting the UnexpectedToken diagnostic from the real parser.
+}
+
+test "U-M diverges from toml.parse: unclosed table (xfail: fixed by U-A)" {
+    const allocator = std.testing.allocator;
+    const inputs = [_][]const u8{"[unclosed table\n"};
+    var results: [1]ParseResult = undefined;
+
+    parseDocuments(allocator, &inputs, &results);
+
+    // CURRENT behavior: the shape-checker does not track bracket balance
+    // for table headers, only for inline-array detection. Returns success.
+    try std.testing.expect(results[0].success);
+    // U-A will make this error out on missing `]`.
+}
+
+test "U-M diverges from toml.parse: duplicate keys (xfail: fixed by U-A)" {
+    const allocator = std.testing.allocator;
+    const inputs = [_][]const u8{"a = 1\na = 2\n"};
+    var results: [1]ParseResult = undefined;
+
+    parseDocuments(allocator, &inputs, &results);
+
+    // CURRENT behavior: shape-checker does not build a symbol table, so
+    // it cannot detect duplicate keys. Returns success.
+    try std.testing.expect(results[0].success);
+    // U-A will make this error out with DuplicateKey.
+}
+
+test "U-M baseline: toml.parse rejects all U-M fixtures" {
+    // Pairing baseline: confirm the REAL parser rejects every input the
+    // shape-checker accepted above. If this test starts passing
+    // together with the xfail ones above, U-A has landed correctly.
+    const toml = @import("toml.zig");
+    const fixtures = [_][]const u8{
+        "a = = 1\n",
+        "[unclosed table\n",
+        "a = 1\na = 2\n",
+    };
+    for (fixtures) |input| {
+        const r = toml.parseWithError(std.testing.allocator, input, .{});
+        switch (r) {
+            .ok => |*d| {
+                var doc = @constCast(d);
+                doc.deinit();
+                try std.testing.expect(false); // real parser must reject
+            },
+            .err => {},
+        }
+    }
+}
+
 test "U-F no dropped inputs past MAX_CHUNKS - parseDocuments" {
     const allocator = std.testing.allocator;
     const N = 100;
