@@ -47,8 +47,7 @@ fn testParseOne(_: void, smith: *std.testing.Smith) !void {
 
     const result = toml.parseWithError(alloc, input, .{});
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             defer doc.deinit();
             // Exercise the JSON emitter too so a parse success followed by
             // a serializer crash is caught in the same harness.

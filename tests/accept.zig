@@ -10,13 +10,13 @@ const toml = @import("toml");
 // Test 1: Tagged JSON minimal
 test "tagged JSON minimal" {
     const input = "a = 42\n";
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
 
-    try toml.writeTaggedJson(&doc, &aw.writer);
+    try toml.writeTaggedJson(doc, &aw.writer);
 
     const expected = "{\"a\":{\"type\":\"integer\",\"value\":\"42\"}}\n";
     try std.testing.expectEqualStrings(expected, aw.written());
@@ -31,8 +31,7 @@ test "duplicate key" {
 
     const result = toml.parseWithError(std.testing.allocator, input, .{});
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false); // Should have failed
         },
@@ -51,13 +50,13 @@ test "v1.1 inline table allows trailing comma and newlines" {
         \\      b = 2, }
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{ .version = .v1_1_0 });
+    const doc = try toml.parse(std.testing.allocator, input, .{ .version = .v1_1_0 });
     defer doc.deinit();
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
 
-    try toml.writeTaggedJson(&doc, &aw.writer);
+    try toml.writeTaggedJson(doc, &aw.writer);
 
     // Keys must be sorted: a then b
     const expected = "{\"t\":{\"a\":{\"type\":\"integer\",\"value\":\"1\"},\"b\":{\"type\":\"integer\",\"value\":\"2\"}}}\n";
@@ -73,8 +72,7 @@ test "v1.0 inline table rejects newlines or trailing comma" {
 
     const result = toml.parseWithError(std.testing.allocator, input, .{ .version = .v1_0_0 });
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false); // Should have failed
         },
@@ -93,13 +91,13 @@ test "v1.0 inline table rejects newlines or trailing comma" {
 test "v1.1 local time seconds omission" {
     const input = "lt = 07:32\n";
 
-    var doc = try toml.parse(std.testing.allocator, input, .{ .version = .v1_1_0 });
+    const doc = try toml.parse(std.testing.allocator, input, .{ .version = .v1_1_0 });
     defer doc.deinit();
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
 
-    try toml.writeTaggedJson(&doc, &aw.writer);
+    try toml.writeTaggedJson(doc, &aw.writer);
 
     const expected = "{\"lt\":{\"type\":\"time-local\",\"value\":\"07:32:00\"}}\n";
     try std.testing.expectEqualStrings(expected, aw.written());
@@ -111,8 +109,7 @@ test "v1.0 rejects local time seconds omission" {
 
     const result = toml.parseWithError(std.testing.allocator, input, .{ .version = .v1_0_0 });
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false); // Should have failed
         },
@@ -132,8 +129,7 @@ test "array-of-tables cannot append to static array" {
 
     const result = toml.parseWithError(std.testing.allocator, input, .{});
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false); // Should have failed
         },
@@ -157,8 +153,7 @@ test "table redefinition error" {
 
     const result = toml.parseWithError(std.testing.allocator, input, .{});
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false);
         },
@@ -177,8 +172,7 @@ test "key redefines non-table" {
 
     const result = toml.parseWithError(std.testing.allocator, input, .{});
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false);
         },
@@ -206,7 +200,7 @@ test "nested array of tables" {
         \\name = "plantain"
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const fruit = doc.root.get("fruit") orelse unreachable;
@@ -235,7 +229,7 @@ test "unicode escapes in strings" {
         \\b = "\U0001F600"
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const a = doc.root.get("a") orelse unreachable;
@@ -254,7 +248,7 @@ test "integer with underscores" {
         \\d = 0b1010_0101
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const a = doc.root.get("a") orelse unreachable;
@@ -273,7 +267,7 @@ test "integer with underscores" {
 test "datetime with offset" {
     const input = "dt = 2024-01-15T10:30:00+05:30\n";
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const dt = doc.root.get("dt") orelse unreachable;
@@ -289,7 +283,7 @@ test "datetime with offset" {
 test "local date" {
     const input = "d = 2024-01-15\n";
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const d = doc.root.get("d") orelse unreachable;
@@ -307,7 +301,7 @@ test "multiline array" {
         \\]
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const arr = doc.root.get("arr") orelse unreachable;
@@ -320,7 +314,7 @@ test "quoted keys" {
         \\'literal key' = 2
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const a = doc.root.get("key with spaces") orelse unreachable;
@@ -337,7 +331,7 @@ test "empty table" {
         \\key = "value"
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const empty = doc.root.get("empty") orelse unreachable;
@@ -354,8 +348,7 @@ test "max depth limit" {
 
     const result = toml.parseWithError(std.testing.allocator, input, .{ .max_depth = 5 });
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             doc.deinit();
             // Depth limit should have triggered
             try std.testing.expect(false);
@@ -373,7 +366,7 @@ test "comments preserved (ignored)" {
         \\# Another comment
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const key = doc.root.get("key") orelse unreachable;
@@ -385,7 +378,7 @@ test "escape sequences" {
         \\str = "backslash: \\ quote: \" tab: \t newline: \n"
     ;
 
-    var doc = try toml.parse(std.testing.allocator, input, .{});
+    const doc = try toml.parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const str = doc.root.get("str") orelse unreachable;
@@ -416,12 +409,12 @@ test "tagged JSON sorts 300 keys deterministically" {
         cursor = (cursor + stride) % N;
     }
 
-    var doc = try toml.parse(allocator, input.items, .{});
+    const doc = try toml.parse(allocator, input.items, .{});
     defer doc.deinit();
 
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
-    try toml.writeTaggedJson(&doc, &aw.writer);
+    try toml.writeTaggedJson(doc, &aw.writer);
     const out = aw.written();
 
     // Scan key positions in the emitted JSON and assert they are sorted.

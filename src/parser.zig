@@ -49,43 +49,36 @@ pub const Parser = struct {
         };
     }
 
-    pub fn parse(self: *Parser) !Document {
-        // UTF-8 validation
+    pub fn parse(self: *Parser) !*Document {
+        // UTF-8 validation (against the caller's original buffer).
         if (!std.unicode.utf8ValidateSlice(self.input)) {
             self.parse_error = err.makeError(.InvalidUtf8, .{}, "input is not valid UTF-8");
             return error.ParseFailed;
         }
 
-        // Size limit check
+        // Size limit check.
         if (self.input.len > self.options.max_bytes) {
             self.parse_error = err.makeError(.LimitExceeded, .{}, "input exceeds max_bytes limit");
             return error.ParseFailed;
         }
 
-        var arena = std.heap.ArenaAllocator.init(self.alloc);
-        errdefer arena.deinit();
+        const doc = try val.createDocument(self.alloc);
+        errdefer doc.deinit();
 
-        const arena_alloc = arena.allocator();
+        const arena_alloc = doc.allocator();
 
-        // Copy the input into the arena so any slices taken from `self.input`
-        // (keys, literal strings, etc.) remain valid for the full lifetime of
-        // the returned Document, independent of the caller's original buffer.
+        // Arena-own the input (see Task 9 / P-5 commentary).
         const owned_input = try arena_alloc.dupe(u8, self.input);
         self.input = owned_input;
         self.lexer = Lexer.init(owned_input, self.options.version);
 
-        const root = try val.createTable(arena_alloc);
-
         // Prime the parser
         self.current = try self.nextToken();
 
-        // Parse document
-        try self.parseDocument(arena_alloc, root);
+        // Parse into the Document's root table.
+        try self.parseDocument(arena_alloc, doc.root);
 
-        return Document{
-            .root = root,
-            .arena = arena,
-        };
+        return doc;
     }
 
     fn parseDocument(self: *Parser, alloc: Allocator, root: *Value) !void {

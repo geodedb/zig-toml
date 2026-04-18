@@ -55,8 +55,7 @@ pub fn main(init: std.process.Init) !void {
     const result = toml.parseWithError(allocator, input, .{});
 
     switch (result) {
-        .ok => |*doc_const| {
-            var doc = @constCast(doc_const);
+        .ok => |doc| {
             defer doc.deinit();
 
             // Write tagged JSON to stdout

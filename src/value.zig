@@ -196,13 +196,31 @@ pub const Value = union(ValueTag) {
 };
 
 /// Parsed TOML document with memory ownership.
+///
+/// A Document is always held via pointer (`*Document`). The underlying
+/// ArenaAllocator is stored by pointer so the Document can never be
+/// moved or copied into a new address — doing so would invalidate the
+/// internal pointers `arena.allocator()` embeds into every Allocator
+/// handle it hands out.
+///
+/// Obtain via `toml.parse` (which returns `*Document`) and destroy via
+/// `doc.deinit()` (which frees the arena *and* the Document struct
+/// itself, which was allocated on the caller's allocator).
 pub const Document = struct {
     root: *Value,
-    arena: std.heap.ArenaAllocator,
+    arena: *std.heap.ArenaAllocator,
+    /// The allocator the Document struct and its arena were created on;
+    /// used by `deinit` to free both.
+    gpa: Allocator,
 
-    /// Free all memory associated with this document.
+    /// Free all memory associated with this document, including the
+    /// Document struct itself. After this call, the `*Document` pointer
+    /// is dangling; do not reuse it.
     pub fn deinit(self: *Document) void {
+        const gpa = self.gpa;
         self.arena.deinit();
+        gpa.destroy(self.arena);
+        gpa.destroy(self);
     }
 
     /// Get a value by dot-separated path.
@@ -210,11 +228,31 @@ pub const Document = struct {
         return self.root.getPath(path);
     }
 
-    /// Get allocator for building values.
+    /// Get the arena allocator for building values into this Document.
     pub fn allocator(self: *Document) Allocator {
         return self.arena.allocator();
     }
 };
+
+/// Create an empty Document on the given allocator. Used by tests and
+/// by `Parser.parse`. The returned pointer must be freed via `deinit`.
+pub fn createDocument(gpa: Allocator) !*Document {
+    const arena_ptr = try gpa.create(std.heap.ArenaAllocator);
+    errdefer gpa.destroy(arena_ptr);
+    arena_ptr.* = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena_ptr.deinit();
+
+    const doc = try gpa.create(Document);
+    errdefer gpa.destroy(doc);
+
+    const root = try createTable(arena_ptr.allocator());
+    doc.* = .{
+        .root = root,
+        .arena = arena_ptr,
+        .gpa = gpa,
+    };
+    return doc;
+}
 
 /// Create an empty table value on the given allocator.
 pub fn createTable(alloc: Allocator) !*Value {

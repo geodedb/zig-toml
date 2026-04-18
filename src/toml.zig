@@ -38,7 +38,7 @@ pub const parallel = @import("parallel.zig");
 ///
 /// Returns error.ParseFailed on parse errors. Access detailed error
 /// information via the parser's parse_error field when using the Parser directly.
-pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !Document {
+pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !*Document {
     var parser = parser_mod.Parser.init(alloc, input, opts);
     return parser.parse() catch |e| {
         if (parser.parse_error) |_| {
@@ -51,7 +51,7 @@ pub fn parse(alloc: Allocator, input: []const u8, opts: ParseOptions) !Document 
 /// Parse TOML with detailed error reporting.
 /// Returns either a Document or a ParseError with location information.
 pub const ParseResult = union(enum) {
-    ok: Document,
+    ok: *Document,
     err: ParseError,
 };
 
@@ -81,7 +81,7 @@ pub fn writeTaggedJson(doc: *const Document, writer: anytype) !void {
 // Unit tests
 test "parse simple key-value" {
     const input = "a = 42\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const a = doc.root.get("a") orelse unreachable;
@@ -92,7 +92,7 @@ test "parse string with escapes" {
     const input =
         \\str = "hello\tworld\n"
     ;
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const str = doc.root.get("str") orelse unreachable;
@@ -101,7 +101,7 @@ test "parse string with escapes" {
 
 test "parse array" {
     const input = "arr = [1, 2, 3]\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const arr = doc.root.get("arr") orelse unreachable;
@@ -117,7 +117,7 @@ test "parse table" {
         \\host = "localhost"
         \\port = 8080
     ;
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const server = doc.root.get("server") orelse unreachable;
@@ -130,7 +130,7 @@ test "parse table" {
 
 test "parse inline table" {
     const input = "point = { x = 1, y = 2 }\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const point = doc.root.get("point") orelse unreachable;
@@ -143,7 +143,7 @@ test "parse inline table" {
 
 test "parse dotted keys" {
     const input = "a.b.c = 1\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const path = &[_][]const u8{ "a", "b", "c" };
@@ -153,7 +153,7 @@ test "parse dotted keys" {
 
 test "parse float" {
     const input = "f = 3.14\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const f = doc.root.get("f") orelse unreachable;
@@ -165,7 +165,7 @@ test "parse bool" {
         \\t = true
         \\f = false
     ;
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const t = doc.root.get("t") orelse unreachable;
@@ -177,7 +177,7 @@ test "parse bool" {
 
 test "parse date-time" {
     const input = "dt = 2024-01-15T10:30:00Z\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const dt = doc.root.get("dt") orelse unreachable;
@@ -188,7 +188,7 @@ test "parse date-time" {
 
 test "parse local time" {
     const input = "lt = 10:30:00\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const lt = doc.root.get("lt") orelse unreachable;
@@ -205,7 +205,7 @@ test "parse array of tables" {
         \\[[products]]
         \\name = "Nail"
     ;
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const products = doc.root.get("products") orelse unreachable;
@@ -222,9 +222,8 @@ test "invalid UTF-8 rejected" {
     const input = "a = \"\xff\xfe\"\n";
     const result = parseWithError(std.testing.allocator, input, .{});
     switch (result) {
-        .ok => |*doc| {
-            var d = @constCast(doc);
-            d.deinit();
+        .ok => |doc| {
+            doc.deinit();
             try std.testing.expect(false);
         },
         .err => |e| {
@@ -235,7 +234,7 @@ test "invalid UTF-8 rejected" {
 
 test "hex integer" {
     const input = "x = 0xDEADBEEF\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const x = doc.root.get("x") orelse unreachable;
@@ -244,7 +243,7 @@ test "hex integer" {
 
 test "octal integer" {
     const input = "x = 0o755\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const x = doc.root.get("x") orelse unreachable;
@@ -253,7 +252,7 @@ test "octal integer" {
 
 test "binary integer" {
     const input = "x = 0b11010110\n";
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const x = doc.root.get("x") orelse unreachable;
@@ -266,7 +265,7 @@ test "multiline basic string" {
         \\hello
         \\world"""
     ;
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const str = doc.root.get("str") orelse unreachable;
@@ -279,7 +278,7 @@ test "multiline literal string" {
         \\hello
         \\world'''
     ;
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const str = doc.root.get("str") orelse unreachable;
@@ -292,7 +291,7 @@ test "special floats" {
         \\b = -inf
         \\c = nan
     ;
-    var doc = try parse(std.testing.allocator, input, .{});
+    const doc = try parse(std.testing.allocator, input, .{});
     defer doc.deinit();
 
     const a = doc.root.get("a") orelse unreachable;
@@ -310,8 +309,7 @@ test "U-R malformed timezone hours rejected" {
     const input = "dt = 2024-01-15T10:30:00+AB:CD\n";
     const result = parseWithError(std.testing.allocator, input, .{});
     switch (result) {
-        .ok => |*d| {
-            var doc = @constCast(d);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false);
         },
@@ -324,8 +322,7 @@ test "U-R malformed fractional seconds rejected" {
     const input = "t = 10:30:00.\n";
     const result = parseWithError(std.testing.allocator, input, .{});
     switch (result) {
-        .ok => |*d| {
-            var doc = @constCast(d);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false);
         },
@@ -352,8 +349,7 @@ test "U-H deep nesting rejected by defense-in-depth guards" {
 
     const result = parseWithError(allocator, buf.items, opts);
     switch (result) {
-        .ok => |*d| {
-            var doc = @constCast(d);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false); // should have failed
         },
@@ -379,8 +375,7 @@ test "U-H deep nested inline tables rejected" {
 
     const result = parseWithError(allocator, buf.items, opts);
     switch (result) {
-        .ok => |*d| {
-            var doc = @constCast(d);
+        .ok => |doc| {
             doc.deinit();
             try std.testing.expect(false);
         },
@@ -402,7 +397,7 @@ test "parallel re-export is reachable" {
     var results: [4]parallel.ParseResult = undefined;
     parallel.parseDocuments(std.testing.allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
         parallel.deinitPool();
     }
 
@@ -415,7 +410,7 @@ test "U-B2 input buffer may be freed before Document.deinit (P-5)" {
     const alloc = std.testing.allocator;
     const input = try alloc.dupe(u8, "server_host = \"localhost\"\n[database]\npool_size = 16\n");
 
-    var doc = try parse(alloc, input, .{});
+    const doc = try parse(alloc, input, .{});
     defer doc.deinit();
 
     alloc.free(input);

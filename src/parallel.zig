@@ -100,7 +100,7 @@ pub const ParseResult = struct {
     /// Number of top-level keys in the root table when `success` is true.
     key_count: usize = 0,
     /// Parsed document when `success` is true. Caller owns — must deinit.
-    doc: ?Document = null,
+    doc: ?*Document = null,
 };
 
 // ============================================================================
@@ -481,7 +481,7 @@ test "parse document - valid" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     try std.testing.expect(results[0].success);
@@ -498,7 +498,7 @@ test "parse document - unclosed string" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     try std.testing.expect(!results[0].success);
@@ -519,7 +519,7 @@ test "parse document - multiline string" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     try std.testing.expect(results[0].success);
@@ -672,7 +672,7 @@ test "parallel parse - large batch" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     for (results) |result| {
@@ -738,7 +738,7 @@ test "U-M aligned with toml.parse: double equals rejected" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     try std.testing.expect(!results[0].success);
@@ -753,7 +753,7 @@ test "U-M aligned with toml.parse: unclosed table rejected" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     try std.testing.expect(!results[0].success);
@@ -767,7 +767,7 @@ test "U-M aligned with toml.parse: duplicate keys rejected" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     try std.testing.expect(!results[0].success);
@@ -786,9 +786,9 @@ test "U-M baseline: toml.parse rejects all U-M fixtures" {
         "a = 1\na = 2\n",
     };
     for (fixtures) |input| {
-        var r = toml.parseWithError(std.testing.allocator, input, .{});
+        const r = toml.parseWithError(std.testing.allocator, input, .{});
         switch (r) {
-            .ok => |*d| {
+            .ok => |d| {
                 d.deinit();
                 try std.testing.expect(false); // real parser must reject
             },
@@ -819,7 +819,7 @@ test "U-F no dropped inputs past MAX_CHUNKS - parseDocuments" {
 
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     for (results, 0..) |result, idx| {
@@ -919,15 +919,15 @@ test "GAP-0001 parallel vs serial differential corpus" {
     var results: [corpus.len]ParseResult = undefined;
     parseDocuments(allocator, &inputs, &results);
     defer {
-        for (&results) |*r| if (r.doc) |*d| d.deinit();
+        for (&results) |*r| if (r.doc) |d| d.deinit();
     }
 
     for (corpus, 0..) |c, i| {
         // Compute the serial oracle answer.
-        var oracle = toml.parseWithError(allocator, c.input, .{});
+        const oracle = toml.parseWithError(allocator, c.input, .{});
         var oracle_success: bool = false;
         switch (oracle) {
-            .ok => |*d| {
+            .ok => |d| {
                 oracle_success = true;
                 d.deinit();
             },
