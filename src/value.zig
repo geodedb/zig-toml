@@ -280,6 +280,62 @@ pub const Value = union(ValueTag) {
             else => .empty,
         };
     }
+
+    /// Insert or overwrite `key` in this table. Takes ownership of
+    /// `value` in the sense that the caller MUST have allocated it
+    /// using `alloc` (or a parent arena) — no copy is made. The
+    /// `key` slice is stored as-is (callers that need stable key
+    /// bytes must dupe before calling, mirroring the free-function
+    /// `tableSet`).
+    ///
+    /// Allocator ownership: pass the same allocator used to build
+    /// the containing `Document` (typically `doc.allocator()`). Using
+    /// a different allocator will cause use-after-free at `deinit`.
+    ///
+    /// Asserts in debug that `self` is tagged `.table`. On release
+    /// builds, calling this on a non-table value is undefined
+    /// behaviour — use `asTable()` first if the tag is not known
+    /// statically.
+    pub fn tableSetOwned(
+        self: *Value,
+        alloc: Allocator,
+        key: []const u8,
+        value: *Value,
+    ) !void {
+        try tableSet(alloc, self, key, value);
+    }
+
+    /// Return the existing child table at `key`, or create a new
+    /// empty table, insert it, and return the new pointer. Asserts
+    /// in debug that `self` is tagged `.table`.
+    ///
+    /// Note: if the key exists but points at a non-table value, the
+    /// existing value pointer is returned unchanged — callers that
+    /// need type-safety must check `.asTable()` on the result.
+    pub fn tableGetOrCreateOwned(
+        self: *Value,
+        alloc: Allocator,
+        key: []const u8,
+    ) !*Value {
+        return tableGetOrCreate(alloc, self, key);
+    }
+
+    /// Append `value` to this array. The payload of `value.*` is
+    /// copied into the array's contiguous backing slice (the array
+    /// stores `Value` by value, not `*Value`). The caller retains
+    /// ownership of the `*Value` pointer but should treat the stored
+    /// copy as the canonical location going forward — mutations to
+    /// the original after append do not propagate.
+    ///
+    /// Same allocator-ownership rules as `tableSetOwned`. Asserts in
+    /// debug that `self` is tagged `.array`.
+    pub fn arrayAppendOwned(
+        self: *Value,
+        alloc: Allocator,
+        value: *Value,
+    ) !void {
+        try arrayAppend(alloc, self, value.*);
+    }
 };
 
 /// Key-value pair yielded by `TableIter.next()`. Both `key` and
@@ -945,4 +1001,52 @@ test "U-V Document.setPathSegments allows segments containing dots" {
 
     const got = doc.getPath(segs) orelse unreachable;
     try std.testing.expectEqual(@as(i64, 123), got.integer);
+}
+
+test "U-V Value.tableSetOwned is the public method form of tableSet" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const tbl = try createTable(alloc);
+    const leaf = try alloc.create(Value);
+    leaf.* = .{ .integer = 1 };
+
+    try tbl.tableSetOwned(alloc, "k", leaf);
+    const got = tbl.get("k") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 1), got.integer);
+}
+
+test "U-V Value.arrayAppendOwned is the public method form of arrayAppend" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const arr = try createArray(alloc);
+    const leaf = try alloc.create(Value);
+    leaf.* = .{ .integer = 7 };
+
+    try arr.arrayAppendOwned(alloc, leaf);
+    // Array stores Values by value; the wrapper copies `leaf.*` into
+    // the backing slice. Assert against the stored copy, not the
+    // caller's pointer.
+    try std.testing.expectEqual(@as(usize, 1), arr.array.items.items.len);
+    try std.testing.expectEqual(@as(i64, 7), arr.array.items.items[0].integer);
+}
+
+test "U-V Value.tableGetOrCreateOwned returns existing or new child table" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const tbl = try createTable(alloc);
+    const first = try tbl.tableGetOrCreateOwned(alloc, "sub");
+    try std.testing.expect(first.* == .table);
+
+    // Second call returns the same pointer (no duplicate insertion).
+    const second = try tbl.tableGetOrCreateOwned(alloc, "sub");
+    try std.testing.expect(first == second);
 }
