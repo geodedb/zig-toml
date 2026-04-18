@@ -377,6 +377,26 @@ test "Q-3 positive smoke: parse then writeTaggedJson round-trip" {
     try std.testing.expect(parsed.value == .object);
 }
 
+test "Q-3 negative smoke: parseWithError populates error_info on failure" {
+    // Guard against a regression where parseWithError returned .err but
+    // with zeroed position data, masking user-facing diagnostics.
+    const input = "key = \n"; // missing value after '='
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| {
+            try std.testing.expect(e.line >= 1);
+            try std.testing.expect(e.column >= 1);
+            try std.testing.expect(e.message.len > 0);
+            // byte_index must point into the input slice.
+            try std.testing.expect(e.byte_index <= input.len);
+        },
+    }
+}
+
 test "U-H deep nesting rejected by defense-in-depth guards" {
     // Build a TOML document with >max_depth nested arrays. Every recursion
     // entrypoint (parseValue, parseArray, parseArrayContents,
