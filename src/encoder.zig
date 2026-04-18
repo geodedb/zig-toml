@@ -509,6 +509,29 @@ test "encode single-level header table" {
     try std.testing.expectEqualStrings(expected, aw.written());
 }
 
+test "encode quotes non-bare keys" {
+    const parser_mod = @import("parser.zig");
+    const input =
+        \\"key with spaces" = 1
+        \\"unicode Ж" = 2
+        \\"" = 3
+        \\
+    ;
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    const expected =
+        "\"\" = 3\n" ++
+        "\"key with spaces\" = 1\n" ++
+        "\"unicode Ж\" = 2\n";
+    try std.testing.expectEqualStrings(expected, aw.written());
+}
+
 test "encode inline table" {
     const parser_mod = @import("parser.zig");
     const input = "point = { x = 1, y = 2 }\n";
