@@ -435,3 +435,38 @@ test "tagged JSON sorts 300 keys deterministically" {
         prev_pos = found;
     }
 }
+
+// S-9: max_keys cap prevents memory amplification on pathological input.
+test "S-9 max_keys cap returns ResourceLimitExceeded" {
+    const allocator = std.testing.allocator;
+
+    // Build a ~256 KiB input of `k<i>=0\n` pairs. At ~8 bytes per line this
+    // produces >30_000 keys, comfortably past the test cap of 100.
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    var i: usize = 0;
+    var line_buf: [64]u8 = undefined;
+    while (buf.items.len < 256 * 1024) : (i += 1) {
+        const line = try std.fmt.bufPrint(&line_buf, "k{d}=0\n", .{i});
+        try buf.appendSlice(allocator, line);
+    }
+
+    const opts = toml.ParseOptions{
+        .max_keys = 100,
+        .max_bytes = 16 * 1024 * 1024,
+    };
+
+    const result = toml.parseWithError(allocator, buf.items, opts);
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false); // must have failed
+        },
+        .err => |e| {
+            try std.testing.expectEqual(
+                toml.ErrorCode.ResourceLimitExceeded,
+                e.code,
+            );
+        },
+    }
+}
