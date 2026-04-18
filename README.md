@@ -156,17 +156,12 @@ for (&inputs) |*s| s.* = "key = \"value\"";
 
 var results: [32]toml.parallel.ParseResult = undefined;
 toml.parallel.parseDocuments(allocator, &inputs, &results);
+defer for (&results) |*r| if (r.doc) |*d| d.deinit();
 defer toml.parallel.deinitPool();
 ```
 
-> **Important:** today, `parallel.parseDocuments` is a lightweight
-> byte-level *shape-checker*, not a full parser. It rejects obvious
-> structural errors (unterminated strings, basic mismatches) but will
-> accept some inputs that `toml.parse` rejects. Use it for large-fanout
-> pre-filtering; use `toml.parse` for any workload that needs a typed
-> value tree. See [docs/API.md](docs/API.md) and
-> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the precise current
-> semantics and the roadmap to promote this to the real parser.
+Every successful result carries the parsed `Document`; the caller owns
+deinit. See [docs/API.md](docs/API.md) for the full contract.
 
 ## CLI Usage
 
