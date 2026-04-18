@@ -38,6 +38,20 @@ pub const parallel = @import("parallel.zig");
 
 pub const schema = @import("schema.zig");
 pub const SchemaError = schema.SchemaError;
+pub const SchemaValidator = schema.Schema;
+pub const SchemaNode = schema.SchemaNode;
+pub const FieldSchema = schema.FieldSchema;
+pub const UnknownFieldPolicy = schema.UnknownFieldPolicy;
+pub const StringOpts = schema.StringOpts;
+pub const IntOpts = schema.IntOpts;
+pub const FloatOpts = schema.FloatOpts;
+pub const ArrayOpts = schema.ArrayOpts;
+pub const Diagnostic = schema.Diagnostic;
+pub const DiagnosticCode = schema.DiagnosticCode;
+pub const DiagnosticList = schema.DiagnosticList;
+pub const DecodeError = schema.DecodeError;
+pub const Decoded = schema.Decoded;
+pub const decode = schema.decode;
 
 comptime {
     // Force Zig test discovery to walk the encoder + encoder_cli modules.
@@ -685,6 +699,44 @@ test "public encode API emits TOML" {
 
     try encode(doc, &aw.writer, .{});
     try std.testing.expectEqualStrings("a = 42\n", aw.written());
+}
+
+test "re-exported toml.decode decodes a struct" {
+    const alloc = std.testing.allocator;
+    const src =
+        \\name = "svc"
+        \\port = 443
+    ;
+    var doc = try parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const Config = struct {
+        name: []const u8,
+        port: u16,
+    };
+
+    var decoded = try decode(Config, alloc, doc);
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings("svc", decoded.value.name);
+    try std.testing.expectEqual(@as(u16, 443), decoded.value.port);
+}
+
+test "re-exported toml.SchemaValidator rejects wrong type" {
+    const alloc = std.testing.allocator;
+    const src = "port = \"oops\"\n";
+    var doc = try parse(alloc, src, .{});
+    defer doc.deinit();
+
+    const port_node = SchemaNode.N.integer(.{});
+    const fields = [_]FieldSchema{
+        .{ .name = "port", .schema = &port_node, .required = true },
+    };
+    const validator = SchemaValidator{ .root = SchemaNode.N.object(&fields, .strict) };
+
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+    try std.testing.expectError(SchemaError.SchemaViolation, validator.validate(doc.root, &diags));
+    try std.testing.expect(diags.len() == 1);
 }
 
 test "float with many underscore separators parses" {
