@@ -148,6 +148,20 @@ pub fn build(b: *std.Build) void {
     });
     const run_docs_hygiene = b.addRunArtifact(docs_hygiene_tests);
 
+    // Encoder CLI tests -- exercises jsonToValue and the full
+    // runEncodePipeline helper inside src/bin/toml_test_encoder.zig.
+    const encoder_cli_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bin/toml_test_encoder.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    const run_encoder_cli_tests = b.addRunArtifact(encoder_cli_tests);
+
     // Fuzz harness -- exercises toml.parse with random bytes via
     // std.testing.fuzz. Under `zig build test` this runs a single smoke
     // iteration so regressions that panic on well-formed inputs still fail
@@ -170,6 +184,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_accept_tests.step);
     test_step.dependOn(&run_encoder_roundtrip_tests.step);
     test_step.dependOn(&run_encoder_golden_tests.step);
+    test_step.dependOn(&run_encoder_cli_tests.step);
     test_step.dependOn(&run_differential_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
     test_step.dependOn(&run_docs_hygiene.step);
