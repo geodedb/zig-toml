@@ -228,6 +228,234 @@ pub const DiagnosticList = struct {
     }
 };
 
+/// Validate `value` against `node`, recording every violation into
+/// `diags`. Returns `error.OutOfMemory` if a diagnostic cannot be
+/// stored; never returns `SchemaViolation` (callers check `diags.len()`).
+pub fn validateNode(
+    node: *const SchemaNode,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    switch (node.*) {
+        .string => |opts| try validateString(opts, value, path, diags),
+        .integer => |opts| try validateInteger(opts, value, path, diags),
+        .float => |opts| try validateFloat(opts, value, path, diags),
+        .boolean => try expectKind(.bool, value, path, diags),
+        .datetime => try expectKind(.datetime, value, path, diags),
+        .datetime_local => try expectKind(.datetime_local, value, path, diags),
+        .date_local => try expectKind(.date_local, value, path, diags),
+        .time_local => try expectKind(.time_local, value, path, diags),
+        .array => |a| try validateArray(a.element, a.opts, value, path, diags),
+        .object => |o| try validateObject(o.fields, o.unknown, value, path, diags),
+        .one_of => |variants| try validateOneOf(variants, value, path, diags),
+    }
+}
+
+fn expectKind(
+    expected: ValueTag,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    const got = @as(ValueTag, value.*);
+    if (got == expected) return;
+    try diags.append(path, .type_mismatch, expected, got, "type mismatch");
+}
+
+fn validateString(
+    opts: StringOpts,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    if (value.* != .string) {
+        try diags.append(path, .type_mismatch, .string, @as(ValueTag, value.*), "expected string");
+        return;
+    }
+    const s = value.string;
+    if (opts.min_len) |m| {
+        if (s.len < m) try diags.append(path, .string_too_short, .string, .string, "string shorter than min_len");
+    }
+    if (opts.max_len) |m| {
+        if (s.len > m) try diags.append(path, .string_too_long, .string, .string, "string longer than max_len");
+    }
+}
+
+fn validateInteger(
+    opts: IntOpts,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    if (value.* != .integer) {
+        try diags.append(path, .type_mismatch, .integer, @as(ValueTag, value.*), "expected integer");
+        return;
+    }
+    const n = value.integer;
+    if (opts.min) |m| {
+        if (n < m) try diags.append(path, .integer_out_of_range, .integer, .integer, "integer below min");
+    }
+    if (opts.max) |m| {
+        if (n > m) try diags.append(path, .integer_out_of_range, .integer, .integer, "integer above max");
+    }
+}
+
+fn validateFloat(
+    opts: FloatOpts,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    if (value.* != .float) {
+        try diags.append(path, .type_mismatch, .float, @as(ValueTag, value.*), "expected float");
+        return;
+    }
+    const f = value.float;
+    if (std.math.isNan(f) and !opts.allow_nan) {
+        try diags.append(path, .float_out_of_range, .float, .float, "NaN not allowed");
+        return;
+    }
+    if (std.math.isInf(f) and !opts.allow_inf) {
+        try diags.append(path, .float_out_of_range, .float, .float, "infinity not allowed");
+        return;
+    }
+    if (opts.min) |m| {
+        if (f < m) try diags.append(path, .float_out_of_range, .float, .float, "float below min");
+    }
+    if (opts.max) |m| {
+        if (f > m) try diags.append(path, .float_out_of_range, .float, .float, "float above max");
+    }
+}
+
+fn joinPath(
+    alloc: Allocator,
+    base: []const u8,
+    child: []const u8,
+) ![]u8 {
+    if (base.len == 0) return alloc.dupe(u8, child);
+    return try std.fmt.allocPrint(alloc, "{s}.{s}", .{ base, child });
+}
+
+fn validateObject(
+    fields: []const FieldSchema,
+    unknown: UnknownFieldPolicy,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    if (value.* != .table) {
+        try diags.append(path, .type_mismatch, .table, @as(ValueTag, value.*), "expected table");
+        return;
+    }
+    const t = &value.table;
+
+    // Check required fields / recurse into present fields.
+    for (fields) |f| {
+        const child = value.get(f.name);
+        if (child == null) {
+            if (f.required) {
+                const child_path = try joinPath(diags.alloc, path, f.name);
+                defer diags.alloc.free(child_path);
+                try diags.append(child_path, .missing_required_field, null, null, "missing required field");
+            }
+            continue;
+        }
+        const child_path = try joinPath(diags.alloc, path, f.name);
+        defer diags.alloc.free(child_path);
+        try validateNode(f.schema, child.?, child_path, diags);
+    }
+
+    if (unknown == .strict) {
+        const keys = t.map.keys();
+        for (keys) |k| {
+            var known = false;
+            for (fields) |f| {
+                if (std.mem.eql(u8, f.name, k)) {
+                    known = true;
+                    break;
+                }
+            }
+            if (!known) {
+                const child_path = try joinPath(diags.alloc, path, k);
+                defer diags.alloc.free(child_path);
+                try diags.append(child_path, .unknown_field, null, null, "unknown field");
+            }
+        }
+    }
+}
+
+fn validateArray(
+    element: *const SchemaNode,
+    opts: ArrayOpts,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    if (value.* != .array) {
+        try diags.append(path, .type_mismatch, .array, @as(ValueTag, value.*), "expected array");
+        return;
+    }
+    const items = value.array.items.items;
+
+    if (opts.min_len) |m| {
+        if (items.len < m) {
+            try diags.append(path, .array_too_short, .array, .array, "array shorter than min_len");
+        }
+    }
+    if (opts.max_len) |m| {
+        if (items.len > m) {
+            try diags.append(path, .array_too_long, .array, .array, "array longer than max_len");
+        }
+    }
+
+    for (items, 0..) |*elem_value, i| {
+        const child_path = try std.fmt.allocPrint(
+            diags.alloc,
+            "{s}[{d}]",
+            .{ path, i },
+        );
+        defer diags.alloc.free(child_path);
+        try validateNode(element, elem_value, child_path, diags);
+    }
+}
+
+fn validateOneOf(
+    variants: []const SchemaNode,
+    value: *const Value,
+    path: []const u8,
+    diags: *DiagnosticList,
+) error{OutOfMemory}!void {
+    var scratch = DiagnosticList.init(diags.alloc);
+    defer scratch.deinit();
+
+    for (variants) |*variant| {
+        scratch.deinit();
+        scratch = DiagnosticList.init(diags.alloc);
+        try validateNode(variant, value, path, &scratch);
+        if (scratch.len() == 0) return; // accepted by this variant
+    }
+
+    try diags.append(path, .one_of_no_match, null, @as(ValueTag, value.*), "no variant matched");
+}
+
+/// Public runtime schema handle. Wraps a root `SchemaNode` and provides the
+/// top-level `validate` entry point. The `validate` method returns
+/// `SchemaError.SchemaViolation` when any diagnostic is recorded, so
+/// callers can use `try schema.validate(...)` for happy-path short-circuit.
+pub const Schema = struct {
+    root: SchemaNode,
+
+    pub fn validate(
+        self: *const Schema,
+        value: *const Value,
+        diags: *DiagnosticList,
+    ) SchemaError!void {
+        try validateNode(&self.root, value, "", diags);
+        if (diags.len() > 0) return SchemaError.SchemaViolation;
+    }
+};
+
 test "schema module compiles" {
     // Placeholder to ensure the module is reachable from the unit-test build.
     try std.testing.expect(true);
@@ -272,4 +500,103 @@ test "DiagnosticList owns path and message copies" {
     try std.testing.expectEqual(@as(usize, 1), list.len());
     try std.testing.expectEqualStrings("a.b[0].c", list.items.items[0].path);
     try std.testing.expectEqualStrings("expected int", list.items.items[0].message);
+}
+
+test "validate integer within range" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const node = SchemaNode.N.integer(.{ .min = 1, .max = 100 });
+    const v = Value{ .integer = 42 };
+    try validateNode(&node, &v, "port", &diags);
+    try std.testing.expectEqual(@as(usize, 0), diags.len());
+}
+
+test "validate integer below min" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const node = SchemaNode.N.integer(.{ .min = 1, .max = 100 });
+    const v = Value{ .integer = 0 };
+    try validateNode(&node, &v, "port", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.integer_out_of_range, diags.items.items[0].code);
+    try std.testing.expectEqualStrings("port", diags.items.items[0].path);
+}
+
+test "validate integer above max" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const node = SchemaNode.N.integer(.{ .min = 1, .max = 100 });
+    const v = Value{ .integer = 999 };
+    try validateNode(&node, &v, "port", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.integer_out_of_range, diags.items.items[0].code);
+}
+
+test "validate type mismatch records expected/got" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const node = SchemaNode.N.integer(.{});
+    const v = Value{ .string = "nope" };
+    try validateNode(&node, &v, "port", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    const d = diags.items.items[0];
+    try std.testing.expectEqual(DiagnosticCode.type_mismatch, d.code);
+    try std.testing.expectEqual(ValueTag.integer, d.expected.?);
+    try std.testing.expectEqual(ValueTag.string, d.got.?);
+}
+
+test "validate string length bounds" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const node = SchemaNode.N.string(.{ .min_len = 2, .max_len = 5 });
+
+    const too_short = Value{ .string = "a" };
+    try validateNode(&node, &too_short, "k", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.string_too_short, diags.items.items[0].code);
+
+    var diags2 = DiagnosticList.init(alloc);
+    defer diags2.deinit();
+    const too_long = Value{ .string = "abcdef" };
+    try validateNode(&node, &too_long, "k", &diags2);
+    try std.testing.expectEqual(@as(usize, 1), diags2.len());
+    try std.testing.expectEqual(DiagnosticCode.string_too_long, diags2.items.items[0].code);
+}
+
+test "validate bool happy path and type mismatch" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const node = SchemaNode.N.boolean();
+    const v_ok = Value{ .bool = true };
+    try validateNode(&node, &v_ok, "flag", &diags);
+    try std.testing.expectEqual(@as(usize, 0), diags.len());
+
+    const v_bad = Value{ .integer = 0 };
+    try validateNode(&node, &v_bad, "flag", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.type_mismatch, diags.items.items[0].code);
+}
+
+test "validate float NaN rejected when allow_nan is false" {
+    const alloc = std.testing.allocator;
+    var diags = DiagnosticList.init(alloc);
+    defer diags.deinit();
+
+    const node = SchemaNode.N.float(.{ .allow_nan = false });
+    const v = Value{ .float = std.math.nan(f64) };
+    try validateNode(&node, &v, "f", &diags);
+    try std.testing.expectEqual(@as(usize, 1), diags.len());
+    try std.testing.expectEqual(DiagnosticCode.float_out_of_range, diags.items.items[0].code);
 }
