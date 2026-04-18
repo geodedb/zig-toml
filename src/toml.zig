@@ -30,6 +30,7 @@ pub const ParseOptions = parser_mod.ParseOptions;
 pub const json_tagged = @import("json_tagged.zig");
 
 pub const encoder = @import("encoder.zig");
+pub const EncodeOptions = encoder.EncodeOptions;
 
 pub const parallel = @import("parallel.zig");
 
@@ -83,6 +84,17 @@ pub fn parseWithError(alloc: Allocator, input: []const u8, opts: ParseOptions) P
 /// Keys are sorted lexicographically at every level for determinism.
 pub fn writeTaggedJson(doc: *const Document, writer: anytype) !void {
     try json_tagged.writeTaggedJson(doc, writer);
+}
+
+/// Encode a Document as TOML text.
+///
+/// Output is deterministic when `options.sort_keys` is true (the
+/// default): keys at every table level are emitted in byte order.
+/// Set `options.indent` > 0 together with a finite `inline_threshold`
+/// to wrap inline arrays that exceed the threshold across multiple
+/// indented lines.
+pub fn encode(doc: *const Document, writer: anytype, options: EncodeOptions) !void {
+    try encoder.encode(doc, writer, options);
 }
 
 // Unit tests
@@ -654,6 +666,18 @@ test "hex integer longer than 64 digits parses (fits i64 after underscore strip)
     defer doc.deinit();
     const n = doc.root.get("n") orelse unreachable;
     try std.testing.expectEqual(@as(i64, 0x7FFFFFFFFFFFFFFF), n.integer);
+}
+
+test "public encode API emits TOML" {
+    const input = "a = 42\n";
+    const doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    try std.testing.expectEqualStrings("a = 42\n", aw.written());
 }
 
 test "float with many underscore separators parses" {

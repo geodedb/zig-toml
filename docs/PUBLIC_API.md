@@ -30,6 +30,7 @@ const DateLocal
 const DateTime
 const DateTimeLocal
 const Document
+const EncodeOptions
 const ErrorCode
 const ParseError
 const ParseOptions
@@ -44,6 +45,7 @@ const json_tagged
 const parallel
 const parser_mod
 const value_mod
+fn encode
 fn parse
 fn parseWithError
 fn writeTaggedJson
