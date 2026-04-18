@@ -149,6 +149,27 @@ fn parseDateLocal(s: []const u8) !DateLocal {
     };
 }
 
+/// Parse tagged-JSON `input`, reconstruct a Document, and encode it as
+/// TOML text to `writer`. The Document and all sub-values live on a
+/// private arena that is released before this function returns.
+pub fn runEncodePipeline(alloc: std.mem.Allocator, input: []const u8, writer: anytype) !void {
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, input, .{});
+    defer parsed.deinit();
+
+    // Build a Document that matches value_mod.createDocument's ownership
+    // contract: arena pointer + original gpa live on `alloc`, everything
+    // else lives on the arena. Using createDocument + root swap keeps the
+    // invariants identical to parser-produced Documents.
+    const doc = try toml.value_mod.createDocument(alloc);
+    defer doc.deinit();
+
+    const new_root = try jsonToValue(doc.allocator(), parsed.value);
+    if (new_root.* != .table) return error.ExpectedRootTable;
+    doc.root = new_root;
+
+    try toml.encode(doc, writer, .{});
+}
+
 fn parseTimeLocal(s: []const u8) !TimeLocal {
     var buf: [128]u8 = undefined;
     const wrapped = try std.fmt.bufPrint(&buf, "x = {s}\n", .{s});
@@ -200,12 +221,23 @@ pub fn main(init: std.process.Init) !void {
     };
     defer allocator.free(input);
 
-    // Main pipeline is wired in Task 19; for now the scaffold just
-    // drains stdin so the allocator plumbing and I/O layout can be
-    // exercised end-to-end without touching the TOML encoder yet.
-    _ = toml;
-
+    runEncodePipeline(allocator, input, &stdout_writer.interface) catch |e| {
+        stderr_writer.interface.print("error: encode failed: {}\n", .{e}) catch {};
+        stderr_writer.interface.flush() catch {};
+        std.process.exit(1);
+    };
     stdout_writer.interface.flush() catch {};
+}
+
+test "encode pipeline: tagged JSON to TOML" {
+    const alloc = std.testing.allocator;
+
+    const json_src = "{\"a\":{\"type\":\"integer\",\"value\":\"42\"}}\n";
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+
+    try runEncodePipeline(alloc, json_src, &out.writer);
+    try std.testing.expectEqualStrings("a = 42\n", out.written());
 }
 
 test "json tree to Value: integer" {
