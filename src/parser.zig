@@ -44,6 +44,13 @@ pub const Parser = struct {
     depth: u16,
     parse_error: ?ParseError,
     input: []const u8,
+    /// Total number of keys created across every table. Incremented
+    /// once per parseKeyValue call; checked against options.max_keys.
+    keys_allocated: usize,
+    /// Total number of `*Value` nodes allocated. Incremented at every
+    /// createTable/createArray/alloc.create(Value) call site; checked
+    /// against options.max_values.
+    values_allocated: usize,
 
     pub fn init(alloc: Allocator, input: []const u8, options: ParseOptions) Parser {
         return .{
@@ -55,7 +62,33 @@ pub const Parser = struct {
             .depth = 0,
             .parse_error = null,
             .input = input,
+            .keys_allocated = 0,
+            .values_allocated = 0,
         };
+    }
+
+    fn bumpKeys(self: *Parser) !void {
+        self.keys_allocated += 1;
+        if (self.keys_allocated > self.options.max_keys) {
+            self.parse_error = err.makeError(
+                .ResourceLimitExceeded,
+                self.current.pos,
+                "max_keys exceeded",
+            );
+            return error.ParseFailed;
+        }
+    }
+
+    fn bumpValues(self: *Parser) !void {
+        self.values_allocated += 1;
+        if (self.values_allocated > self.options.max_values) {
+            self.parse_error = err.makeError(
+                .ResourceLimitExceeded,
+                self.current.pos,
+                "max_values exceeded",
+            );
+            return error.ParseFailed;
+        }
     }
 
     pub fn parse(self: *Parser) !*Document {
