@@ -50,7 +50,6 @@ const std = @import("std");
 const tp = @import("thread_pool");
 const toml = @import("toml.zig");
 const Document = toml.Document;
-const ErrorCode = toml.ErrorCode;
 
 // ============================================================================
 // Global Thread Pool
@@ -92,8 +91,7 @@ pub fn deinitPool() void {
 pub const ParseResult = struct {
     /// Whether parsing succeeded.
     success: bool = false,
-    /// Error code mapped from `toml.ErrorCode` (0 = success, otherwise
-    /// `@intFromEnum(toml.ErrorCode) + 1` so 0 is reserved for success).
+    /// Error code mapped from `toml.ErrorCode`; 0 indicates success.
     error_code: u8 = 0,
     /// 1-based error line (if failed).
     error_line: ?usize = null,
@@ -718,11 +716,10 @@ test "U-M baseline: toml.parse rejects all U-M fixtures" {
         "a = 1\na = 2\n",
     };
     for (fixtures) |input| {
-        const r = toml.parseWithError(std.testing.allocator, input, .{});
+        var r = toml.parseWithError(std.testing.allocator, input, .{});
         switch (r) {
             .ok => |*d| {
-                var doc = @constCast(d);
-                doc.deinit();
+                d.deinit();
                 try std.testing.expect(false); // real parser must reject
             },
             .err => {},
@@ -838,35 +835,27 @@ test "GAP-0001 parallel vs serial differential corpus" {
         .{ .input = "a = 01\n", .expect_success = false, .label = "leading zero on int" },
         .{ .input = "a = 1.\n", .expect_success = false, .label = "trailing dot on float" },
         .{ .input = "dt = 2024-13-40T99:99:99Z\n", .expect_success = false, .label = "nonsense datetime" },
-        .{ .input = "arr = [1, \"two\"]\n", .expect_success = false, .label = "mixed array types (v1.0 behavior ok; v1.1 ok too — treat as accept)" },
+        .{ .input = "arr = [1, \"two\"]\n", .expect_success = true, .label = "mixed array types (v1.1 allows heterogeneous)" },
         .{ .input = "a = \"bare\x00null\"\n", .expect_success = false, .label = "null in string (S-3)" },
     };
 
-    // NOTE: the "mixed array types" case flips accept/reject across TOML
-    // versions. Under v1.1.0 defaults (parser's default), heterogeneous
-    // arrays are allowed, so the baseline expectation is `true`. Flip to
-    // `true` here so the test stays stable.
-    var adjusted: [corpus.len]Case = corpus;
-    adjusted[18].expect_success = true;
+    var inputs: [corpus.len][]const u8 = undefined;
+    for (corpus, 0..) |c, i| inputs[i] = c.input;
 
-    var inputs: [adjusted.len][]const u8 = undefined;
-    for (adjusted, 0..) |c, i| inputs[i] = c.input;
-
-    var results: [adjusted.len]ParseResult = undefined;
+    var results: [corpus.len]ParseResult = undefined;
     parseDocuments(allocator, &inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |*d| d.deinit();
     }
 
-    for (adjusted, 0..) |c, i| {
+    for (corpus, 0..) |c, i| {
         // Compute the serial oracle answer.
-        const oracle = toml.parseWithError(allocator, c.input, .{});
+        var oracle = toml.parseWithError(allocator, c.input, .{});
         var oracle_success: bool = false;
         switch (oracle) {
             .ok => |*d| {
                 oracle_success = true;
-                var doc = @constCast(d);
-                doc.deinit();
+                d.deinit();
             },
             .err => {},
         }
