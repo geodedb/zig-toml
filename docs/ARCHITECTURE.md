@@ -421,6 +421,30 @@ zig build test
 toml-test ./zig-out/bin/toml-test-decoder
 ```
 
+### Three-layer test strategy
+
+zigtoml verifies correctness at three layers, each with different trade-offs:
+
+1. **Unit tests** (`src/*.zig`, `tests/accept.zig`) -- small, focused,
+   handwritten assertions on individual parser rules. Fast and always
+   green; the surface area is whatever we thought to write.
+2. **Differential corpus** (`tests/differential.zig` +
+   `tests/testdata/toml-test/`) -- walks a vendored 30-case subset of
+   BurntSushi/toml-test (MIT-licensed, pinned at v1.5.0). Each valid
+   case round-trips through `writeTaggedJson` and is compared byte-for-byte
+   to a `.json` fixture; each invalid case must return `.err` from
+   `parseWithError`. Runs as part of `zig build test` -- no network.
+3. **Conformance stage** (GitLab CI `conformance-decoder` job) -- runs
+   the full pinned upstream toml-test runner against
+   `zig-out/bin/toml-test-decoder`. Archives `conformance.log` for
+   every pipeline run. `allow_failure: true` until the pass rate is
+   stable at >= 95%.
+
+The differential layer exists specifically so local `zig build test` has
+signal against grammar regressions even when CI is not available, and
+so a failing fixture can be bisected against a single commit without
+re-running the full upstream harness.
+
 ## File Structure
 
 ```text
