@@ -1050,3 +1050,47 @@ test "U-V Value.tableGetOrCreateOwned returns existing or new child table" {
     const second = try tbl.tableGetOrCreateOwned(alloc, "sub");
     try std.testing.expect(first == second);
 }
+
+test "U-V public mutation API — end-to-end round trip" {
+    const doc = try createDocument(std.testing.allocator);
+    defer doc.deinit();
+
+    // setPath (GAP-0013)
+    const port = try doc.allocator().create(Value);
+    port.* = .{ .integer = 5432 };
+    try doc.setPath("db.port", port);
+
+    // tableSetOwned + arrayAppendOwned (GAP-0009)
+    const hosts = try createArray(doc.allocator());
+    for ([_][]const u8{ "a", "b", "c" }) |s| {
+        const v = try doc.allocator().create(Value);
+        v.* = .{ .string = s };
+        try hosts.arrayAppendOwned(doc.allocator(), v);
+    }
+    const db_const = doc.root.get("db") orelse unreachable;
+    // `get` returns *const Value; mutation methods take *Value. This
+    // @constCast is the one sharp edge of the public API: callers
+    // that built the Value in the first place know it is mutable.
+    const db = @constCast(db_const);
+    try db.tableSetOwned(doc.allocator(), "hosts", hosts);
+
+    // Typed accessors (GAP-0014) — asArray takes *Value so we need a
+    // mutable handle. `db.get("hosts")` is *const Value; @constCast
+    // up is safe here because the underlying storage lives in the
+    // arena and is not declared const.
+    try std.testing.expectEqual(@as(i64, 5432), db.get("port").?.asI64().?);
+    const hosts_const = db.get("hosts").?;
+    try std.testing.expect(@constCast(hosts_const).asArray() != null);
+    try std.testing.expectEqual(@as(?i64, null), hosts_const.asI64());
+
+    // Iterators (GAP-0012)
+    var hit = hosts_const.iterator().array_iter;
+    var seen: usize = 0;
+    while (hit.next()) |_| seen += 1;
+    try std.testing.expectEqual(@as(usize, 3), seen);
+
+    var dit = db.iterator().table_iter;
+    var keys_seen: usize = 0;
+    while (dit.next()) |_| keys_seen += 1;
+    try std.testing.expectEqual(@as(usize, 2), keys_seen); // port, hosts
+}

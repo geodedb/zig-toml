@@ -7,8 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet. The 0.2.0 line below captures everything through the
-`feat/encoder-suite` (Plan 06) branch._
+### Added
+
+- Public mutation API on `Value` and `Document` (closes GAP-0009,
+  GAP-0012, GAP-0013, GAP-0014):
+  - Typed accessors: `asI64`, `asF64`, `asBool`, `asString`,
+    `asArray`, `asTable` return optionals instead of panicking on
+    tag mismatch.
+  - Iterators: `Value.iterator()` returns a tagged `ValueIterator`
+    with `TableIter` (yields `{ key, value }` in insertion order)
+    and `ArrayIter` (yields `*Value` in index order). Non-container
+    values return `.empty`. `reset()` supported for multi-pass.
+  - `Document.setPath("a.b.c", value)` and
+    `Document.setPathSegments(&.{"a", "b", "c"}, value)` write a
+    leaf at a dotted key path, creating intermediate tables. Errors
+    on path collisions (intermediate non-table), empty paths, and
+    empty path segments.
+  - `Value.tableSetOwned`, `Value.tableGetOrCreateOwned`, and
+    `Value.arrayAppendOwned` are the public method form of the
+    previously-internal free functions. `arrayAppendOwned` takes a
+    `*Value` and internally copies the payload into the array's
+    by-value backing storage.
+  - New reference example: `examples/mutation.zig`.
 
 ## [0.1.1] - 2026-01-26
 

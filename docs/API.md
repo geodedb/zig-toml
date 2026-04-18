@@ -753,4 +753,105 @@ BurntSushi/toml-test harness. Closes GAP-0007.
 
 ---
 
+## Mutation API
+
+The mutation surface is designed for programmatic document construction and
+in-place updates. All mutations go through an externally supplied
+`Allocator` — typically `doc.allocator()`, which returns the document's
+arena allocator. Using a foreign allocator will cause use-after-free on
+`Document.deinit`.
+
+### Typed accessors on `Value`
+
+Return optionals; never panic on tag mismatch. Replaces the pattern
+`switch (v) { .integer => |i| i, else => return null }`.
+
+| Method | Returns | Null when |
+|--------|---------|-----------|
+| `asI64() ?i64` | `i64` | tag is not `.integer` |
+| `asF64() ?f64` | `f64` | tag is not `.float` |
+| `asBool() ?bool` | `bool` | tag is not `.bool` |
+| `asString() ?[]const u8` | string slice (borrowed from arena) | tag is not `.string` |
+| `asArray() ?*Array` | pointer into the Value's array payload | tag is not `.array` |
+| `asTable() ?*Table` | pointer into the Value's table payload | tag is not `.table` |
+
+No coercion is performed: a `.float` of `1.0` returns `null` from
+`asI64()`, not `1`.
+
+`asArray` and `asTable` take `self: *Value` (mutable) so the returned
+pointer can be used to mutate the container. `asI64`/`asF64`/`asBool`/
+`asString` take `self: *const Value` since they return payloads by
+value and need no mutation.
+
+### Iterators
+
+`Value.iterator()` returns a `ValueIterator` tagged union dispatched on
+the value's tag. Each iterator yields entries in insertion / index order
+and supports `reset()` for multi-pass iteration.
+
+```zig
+pub const ValueIterator = union(enum) {
+    table_iter: TableIter,
+    array_iter: ArrayIter,
+    empty: void,
+};
+```
+
+`TableIter.next()` yields `?TableIterEntry { key: []const u8, value: *Value }`.
+`ArrayIter.next()` yields `?*Value` pointing into the array's backing
+slice. `empty` is returned for all non-container tags.
+
+Mutations that grow the backing slice (e.g. `tableSetOwned`,
+`arrayAppendOwned`) invalidate the iterator — do not mutate during
+iteration.
+
+### Mutation methods on `Value`
+
+| Method | Effect | Notes |
+|--------|--------|-------|
+| `tableSetOwned(alloc, key, value) !void` | Insert or overwrite `key` in this table | Debug-asserts tag is `.table`; `key` stored as-is; `value` is borrowed (no copy) |
+| `tableGetOrCreateOwned(alloc, key) !*Value` | Fetch or create a child empty table | If the key exists but is not a table, returns the existing pointer unchanged |
+| `arrayAppendOwned(alloc, value) !void` | Append to this array | Debug-asserts tag is `.array`; the payload of `value.*` is copied into the array's contiguous storage |
+
+The legacy free-function forms (`tableSet`, `tableGetOrCreate`,
+`arrayAppend`) remain for internal parser use and behave identically.
+Note that `arrayAppend` takes `Value` by value while `arrayAppendOwned`
+takes `*Value` and internally passes `value.*` — match the public method
+for new callers.
+
+Note: `Value.get` returns `*const Value`, so mutating a value fetched
+through it requires `@constCast`. Callers that built the Value
+themselves already hold a `*Value` and do not need the cast.
+
+### Dotted-path mutation on `Document`
+
+```zig
+pub fn setPath(self: *Document, path: []const u8, leaf: *Value) !void
+pub fn setPathSegments(self: *Document, segments: []const []const u8, leaf: *Value) !void
+```
+
+`setPath` splits a dotted string (`"server.http.port"`) into segments.
+`setPathSegments` accepts a pre-split slice for segments that themselves
+contain `.` (e.g. `"v1.2.3"`).
+
+Both create missing intermediate tables. Errors:
+
+| Error | Condition |
+|-------|-----------|
+| `error.EmptyPath` | `path.len == 0` (or `segments.len == 0`) |
+| `error.EmptyPathSegment` | Consecutive dots or a leading/trailing dot |
+| `error.PathTooDeep` | More than 64 segments |
+| `error.PathCollision` | An intermediate segment already holds a non-table value |
+
+Overwriting an existing leaf is **not** an error — the old value
+remains in the arena and is reclaimed at `deinit`.
+
+### Example
+
+See `examples/mutation.zig` for a full end-to-end program that builds a
+Document programmatically, reads it back with typed accessors, and
+iterates nested tables and arrays.
+
+---
+
 API Reference for zigtoml TOML Parser.
