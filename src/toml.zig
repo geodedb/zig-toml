@@ -410,3 +410,20 @@ test "parallel re-export is reachable" {
         try std.testing.expect(r.success);
     }
 }
+
+test "U-B2 input buffer may be freed before Document.deinit (P-5)" {
+    const alloc = std.testing.allocator;
+    const input = try alloc.dupe(u8, "server_host = \"localhost\"\n[database]\npool_size = 16\n");
+
+    var doc = try parse(alloc, input, .{});
+    defer doc.deinit();
+
+    alloc.free(input);
+
+    const host = doc.root.get("server_host") orelse unreachable;
+    try std.testing.expectEqualStrings("localhost", host.string);
+
+    const db = doc.root.get("database") orelse unreachable;
+    const pool = db.get("pool_size") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 16), pool.integer);
+}
