@@ -298,6 +298,10 @@ pub const Parser = struct {
         // Save position of the key for error reporting
         const key_pos = self.current.pos;
 
+        // S-9: charge the key cap up-front so pathological inputs are
+        // rejected before the expensive value parse runs.
+        try self.bumpKeys();
+
         // Parse key path (may be dotted). 8 segments handles practical paths.
         var path: std.ArrayList([]const u8) = try .initCapacity(alloc, 8);
         try self.parseKeyPath(alloc, &path);
