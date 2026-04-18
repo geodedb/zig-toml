@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `parallel.parseDocuments`/`validateDocuments`/`extractKeys`: ceiling-
+  divide `chunk_size` so the tail of large batches (inputs > MAX_CHUNKS)
+  is no longer silently dropped. Every `results[i]` slot is now written.
+- `docs/API.md`: corrected Library Version header from `1.0` to `0.1.0`
+  to match `build.zig.zon` and this changelog.
+
 ## [0.1.0] - 2026-01-24
 
 ### Added
