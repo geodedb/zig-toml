@@ -139,6 +139,75 @@ try toml.writeTaggedJson(doc, stdout);
 // Output: {"a":{"type":"integer","value":"42"}}
 ```
 
+## Encoding
+
+### encode
+
+```zig
+pub fn encode(doc: *const Document, writer: anytype, options: EncodeOptions) !void
+```
+
+**Description:** Write a Document as TOML text. Output is deterministic when
+`sort_keys` is true (the default): keys are byte-order sorted at every level,
+and array element order is preserved from the source.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| doc | *const Document | Document to serialize |
+| writer | anytype | Any `std.Io.Writer`-shaped sink |
+| options | EncodeOptions | Formatting options |
+
+**Returns:** `void` on success.
+
+**Errors:** Bubbles up allocator and writer errors. Will not emit a TOML
+parse error because the input is an already-validated `Document`.
+
+**Example:**
+
+```zig
+var doc = try toml.parse(allocator, "a = 42\n", .{});
+defer doc.deinit();
+
+var aw: std.Io.Writer.Allocating = .init(allocator);
+defer aw.deinit();
+try toml.encode(doc, &aw.writer, .{});
+// aw.written() == "a = 42\n"
+```
+
+Closes GAP-0006 (encoder feature) and GAP-0008 (pretty-print / stable-sort
+output) -- see `docs/GAP_ANALYSIS_RESOLVED.md` for the closure evidence.
+
+### EncodeOptions
+
+```zig
+pub const EncodeOptions = struct {
+    sort_keys: bool = true,
+    indent: u8 = 0,
+    inline_threshold: usize = 8,
+};
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| sort_keys | true | Sort table keys byte-order at every level |
+| indent | 0 | Spaces of indent for wrapped inline arrays (0 disables wrapping) |
+| inline_threshold | 8 | Inline arrays longer than this wrap when `indent > 0` |
+
+### Encoder rules
+
+- Always emits decimal integers (hex/oct/bin source forms are not preserved).
+- Always emits basic double-quoted strings with JSON escapes (no literal or
+  multi-line forms).
+- Nested tables are emitted as `[header]` sections, never as dotted keys.
+- Inline tables (`Value.Table.is_inline == true`) stay inline.
+- Non-static arrays of tables (`Value.Array.is_static == false`) are emitted
+  as `[[header]]` blocks.
+- `inf`, `-inf`, and `nan` are emitted literally.
+- Datetime values delegate to the format methods on `DateTime`,
+  `DateTimeLocal`, `DateLocal`, `TimeLocal` in `src/value.zig`.
+
 ## Types
 
 ### ParseOptions
@@ -667,6 +736,20 @@ defer for (&results) |*r| if (r.doc) |d| d.deinit();
 
 for (results) |r| std.debug.assert(r.success);
 ```
+
+## CLI Binaries
+
+### toml-test-decoder
+
+Reads TOML from stdin, writes toml-test compatible tagged JSON to stdout.
+Exits 0 on success, 1 on parse failure (one-line diagnostic on stderr).
+
+### toml-test-encoder
+
+Reads toml-test compatible tagged JSON from stdin, writes TOML to stdout.
+Exits 0 on success, 1 on JSON parse failure or encode failure (one-line
+diagnostic on stderr). Used together with `toml-test-decoder` in the
+BurntSushi/toml-test harness. Closes GAP-0007.
 
 ---
 

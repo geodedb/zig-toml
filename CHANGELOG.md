@@ -7,38 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Encoder: `src/encoder.zig` implements `encode(doc, writer, options)`
-  with full coverage of integers, floats (including `inf`/`-inf`/`nan`),
-  booleans, basic strings, all four datetime kinds, inline arrays,
-  inline tables, `[header]` sections, and `[[array-of-tables]]`
-  (closes GAP-0006). Public API: `toml.encode`, `toml.EncodeOptions`,
-  and the `toml.encoder` module.
-- Encoder: `EncodeOptions` exposes `sort_keys` (default `true`),
-  `indent` (default `0`), and `inline_threshold` (default `8`).
-  `sort_keys=true` sorts keys lexicographically at every level for
-  deterministic output; `indent > 0` wraps inline arrays longer than
-  `inline_threshold` across indented lines (closes GAP-0008).
-- Tests: `tests/encoder_roundtrip.zig` (50-case corpus) asserts
-  `parse(encode(parse(x)))` yields the same tagged-JSON projection as
-  `parse(x)` for every value kind and table shape.
-- Tests: `tests/encoder_golden.zig` locks byte-exact output for
-  sort_keys determinism and wrapped-array pretty-printing.
-- CI: `conformance-decoder` GitLab job runs the pinned BurntSushi/toml-test
-  corpus against `zig-out/bin/toml-test-decoder` and uploads the full log
-  as an artifact (closes GAP-0004).
-- Tests: `tests/differential.zig` walks a vendored 30-case toml-test
-  subset under `tests/testdata/toml-test/` and asserts valid inputs
-  produce the expected tagged JSON and invalid inputs are rejected
-  (closes Q-13).
-
-### Changed
-
-- Tests: the two "U-R malformed" smoke tests in `src/toml.zig` and two new
-  smoke tests now assert `error_info` carries line, column, message, and
-  byte_index on failure, instead of only checking `.success == true`
-  (closes Q-3).
+_Nothing yet. The 0.2.0 line below captures everything through the
+`feat/encoder-suite` (Plan 06) branch._
 
 ## [0.1.1] - 2026-01-26
 
@@ -85,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forms remain as deprecated shims for 0.2.x and will be removed in
   0.3.0.
 - `parallel.getPool` now returns `!*ThreadPool` and never `@panic`s.
+
+### Changed
+
+- Tests: the two "U-R malformed" smoke tests in `src/toml.zig` and two
+  new smoke tests now assert `error_info` carries line, column, message,
+  and byte_index on failure, instead of only checking `.success == true`
+  (closes Q-3).
 
 ### Security
 
@@ -139,6 +116,33 @@ defer doc.deinit();
 
 ### Added
 
+- `toml.encode(doc, writer, options)`: TOML encoder covering strings,
+  integers, floats (including `inf`/`-inf`/`nan`), booleans, all four
+  datetime forms, inline arrays, inline tables, `[header]` sections,
+  and `[[header]]` array-of-tables. Public API lives in `src/encoder.zig`
+  and is re-exported as `toml.encode` / `toml.encoder`. Closes GAP-0006.
+- `toml.EncodeOptions`: `sort_keys` (default `true`), `indent` (default
+  `0`), and `inline_threshold` (default `8`) for deterministic /
+  pretty-printed output. `sort_keys=true` sorts keys byte-order at every
+  level; `indent > 0` wraps inline arrays longer than `inline_threshold`
+  across indented lines. Closes GAP-0008.
+- `toml-test-encoder` CLI binary (`src/bin/toml_test_encoder.zig`):
+  reads toml-test tagged JSON from stdin, emits TOML to stdout. Pairs
+  with `toml-test-decoder` to drive the BurntSushi/toml-test harness.
+  Supporting CLI glue lives in `src/encoder_cli.zig` (`jsonToValue`,
+  `runEncodePipeline`). Closes GAP-0007.
+- GitLab CI `toml-test-conformance` job (marked `allow_failure: true`
+  initially): builds both CLIs and runs the upstream toml-test suite
+  against each direction. Partially addresses GAP-0004.
+- Tests: `tests/encoder_roundtrip.zig` (round-trip corpus) asserts
+  `parse(encode(parse(x)))` yields the same tagged-JSON projection as
+  `parse(x)` for every value kind and table shape; `tests/encoder_golden.zig`
+  locks byte-exact output for sort_keys determinism and wrapped-array
+  pretty-printing.
+- Tests: `tests/differential.zig` walks a vendored 30-case toml-test
+  subset under `tests/testdata/toml-test/` and asserts valid inputs
+  produce the expected tagged JSON and invalid inputs are rejected
+  (closes Q-13).
 - Real coverage-guided fuzz harness (`tests/fuzz_parse.zig`) wired into
   `zig build test --fuzz`. The GitLab CI `fuzz` stage now exercises a
   real target instead of a no-op. (GAP-0003)

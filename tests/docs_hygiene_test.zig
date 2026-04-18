@@ -53,6 +53,8 @@ test "ARCHITECTURE.md file-structure lists every src/*.zig" {
         "datetime.zig",
         "number.zig",
         "string.zig",
+        "encoder.zig",
+        "encoder_cli.zig",
     };
     for (required) |name| {
         if (std.mem.indexOf(u8, body, name) == null) {

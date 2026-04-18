@@ -16,22 +16,22 @@ The zigtoml library is a fully compliant TOML v1.0.0/v1.1.0 parser implemented i
                                     └────────┬────────┘
                                              │
                                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│                         toml.zig (Public API)                   │
-│  ┌──────────────────┐  ┌────────────────┐  ┌────────────────┐  │
-│  │ parse()          │  │ parseWithError │  │ writeTaggedJson│  │
-│  └────────┬─────────┘  └───────┬────────┘  └───────┬────────┘  │
-└───────────┼────────────────────┼───────────────────┼───────────┘
-            │                    │                   │
-            ▼                    ▼                   ▼
-    ┌───────────────────────────────────┐    ┌──────────────────┐
-    │           parser.zig              │    │ json_tagged.zig  │
-    │  ┌─────────────────────────────┐  │    │                  │
-    │  │ Parser                      │  │    │ Tagged JSON      │
-    │  │  - parseDocument() (real)   │  │    │ emitter for      │
-    │  │  - parseTableHeader()       │  │    │ toml-test        │
-    │  │  - parseKeyValue()          │  │    │                  │
-    │  │  - parseValue()             │  │    └──────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                           toml.zig (Public API)                           │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │ parse()  │  │parseWithError│  │writeTaggedJson│  │ encode()         │  │
+│  └────┬─────┘  └───────┬──────┘  └───────┬──────┘  └────────┬─────────┘  │
+└───────┼────────────────┼─────────────────┼──────────────────┼────────────┘
+        │                │                 │                  │
+        ▼                ▼                 ▼                  ▼
+    ┌───────────────────────────────────┐    ┌──────────────────┐   ┌──────────────────┐
+    │           parser.zig              │    │ json_tagged.zig  │   │   encoder.zig    │
+    │  ┌─────────────────────────────┐  │    │                  │   │                  │
+    │  │ Parser                      │  │    │ Tagged JSON      │   │ TOML emitter     │
+    │  │  - parseDocument() (real)   │  │    │ emitter for      │   │  - encode()      │
+    │  │  - parseTableHeader()       │  │    │ toml-test        │   │  - EncodeOptions │
+    │  │  - parseKeyValue()          │  │    │                  │   │                  │
+    │  │  - parseValue()             │  │    └──────────────────┘   └──────────────────┘
     │  │  - parseArray()             │  │
     │  │  - parseInlineTable()       │  │
     │  └──────────────┬──────────────┘  │
@@ -246,6 +246,47 @@ Serializes parsed documents to toml-test format.
 - Proper JSON string escaping
 - Float formatting with decimal points
 - Support for all datetime types
+
+### 7. Encoder (encoder.zig)
+
+Encoder component: walks a `Document` and emits TOML v1.0.0 grammar via a
+caller-supplied `std.Io.Writer`. Public entry points:
+
+- `EncodeOptions { sort_keys, indent, inline_threshold }`
+- `encode(doc, writer, options) !void`
+
+**Design decisions:**
+
+- Nested tables always become `[header]` sections (never collapsed to
+  dotted keys) for readable output.
+- Inline-table and static-array shape is preserved from the input's
+  `Value.Table.is_inline` and `Value.Array.is_static` flags.
+- All integers are emitted decimal; source hex/oct/bin form is not
+  preserved.
+- Strings are always basic double-quoted with JSON escapes.
+- Determinism: when `sort_keys` (default) is true, every table's entries
+  are sorted byte-order before emission, mirroring `json_tagged.zig`.
+- Pretty-print knobs (`indent`, `inline_threshold`) control wrapped
+  inline-array emission without changing semantic output.
+
+### 8. Encoder CLI (encoder_cli.zig + bin/toml_test_encoder.zig)
+
+Thin glue layer that drives the encoder from a toml-test-compatible
+stdin/stdout pipeline:
+
+- `encoder_cli.zig` hosts the pure functions (`jsonToValue`,
+  `runEncodePipeline`) that accept tagged JSON and emit TOML via the
+  encoder. Unit tests live alongside the helpers.
+- `src/bin/toml_test_encoder.zig` is the binary entry point wired into
+  `build.zig`. It reads tagged JSON from stdin, invokes
+  `runEncodePipeline`, and writes TOML to stdout. Exits 0 on success,
+  1 on JSON-parse or encode failure with a one-line diagnostic on
+  stderr.
+
+The CLI pairs with `src/bin/toml_test_decoder.zig` to feed the
+BurntSushi/toml-test encoder harness driven by the
+`toml-test-conformance` GitLab CI stage (allow_failure, tracked under
+GAP-0004 for eventual required-gate flip).
 
 ## Memory Management
 
@@ -467,9 +508,12 @@ src/
 ├── value.zig          # Value types and Document
 ├── error.zig          # Error types
 ├── json_tagged.zig    # Tagged JSON emitter
+├── encoder.zig        # TOML encoder: encode(), EncodeOptions
+├── encoder_cli.zig    # CLI glue: jsonToValue, runEncodePipeline
 ├── parallel.zig       # ParallelContext: fan-out parse/validate/extract
 └── bin/
-    └── toml_test_decoder.zig  # CLI for toml-test
+    ├── toml_test_decoder.zig  # CLI for toml-test (parse -> tagged JSON)
+    └── toml_test_encoder.zig  # CLI for toml-test (tagged JSON -> TOML)
 ```
 
 The `parser/` submodules are pure delegates: `src/parser.zig`
