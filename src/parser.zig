@@ -694,12 +694,35 @@ pub const Parser = struct {
         return Value{ .array = .{ .items = items, .is_static = true } };
     }
 
+    /// Scratch state carried from `parseInlineTableHeader` through
+    /// `parseInlineTableBody` into `validateInlineTableV10Restrictions`.
+    const InlineTableHeader = struct {
+        /// Position of the opening `{` — used for trailing-comma errors.
+        open_pos: Position,
+        /// The entry map under construction. The caller-owned `map` is
+        /// wrapped into a `Value.table` by `parseInlineTable` once the
+        /// body completes.
+        map: std.StringArrayHashMapUnmanaged(*Value),
+    };
+
     fn parseInlineTable(self: *Parser, alloc: Allocator) ParseValueError!Value {
         // Defense-in-depth: inline tables are a recursive construct too.
         try self.enterDepth();
         defer self.exitDepth();
 
-        const start_pos = self.current.pos;
+        var header = try self.parseInlineTableHeader(alloc);
+        errdefer header.map.deinit(alloc);
+
+        var saw_trailing_comma: bool = false;
+        var saw_newline_inside: bool = false;
+        try self.parseInlineTableBody(alloc, &header, &saw_trailing_comma, &saw_newline_inside);
+        try self.validateInlineTableV10Restrictions(&header, saw_trailing_comma, saw_newline_inside);
+
+        return Value{ .table = .{ .map = header.map, .is_inline = true, .is_closed_inline = true } };
+    }
+
+    fn parseInlineTableHeader(self: *Parser, alloc: Allocator) ParseValueError!InlineTableHeader {
+        const open_pos = self.current.pos;
         self.current = try self.nextToken(); // consume {
 
         // Typical inline tables have a handful of entries; 16 avoids the
@@ -708,13 +731,20 @@ pub const Parser = struct {
         errdefer map.deinit(alloc);
         try map.ensureTotalCapacity(alloc, 16);
 
+        return .{ .open_pos = open_pos, .map = map };
+    }
+
+    fn parseInlineTableBody(
+        self: *Parser,
+        alloc: Allocator,
+        header: *InlineTableHeader,
+        saw_trailing_comma: *bool,
+        saw_newline_inside: *bool,
+    ) ParseValueError!void {
         while (self.current.tag != .right_brace and self.current.tag != .eof) {
-            // Check for newlines in v1.0 mode
+            // Track newlines inside the body; v1.0 validation happens later.
             if (self.current.tag == .newline) {
-                if (self.options.version == .v1_0_0) {
-                    self.parse_error = err.makeError(.InlineTableNewlineNotAllowed, self.current.pos, "newlines not allowed in inline tables in TOML v1.0");
-                    return error.ParseFailed;
-                }
+                saw_newline_inside.* = true;
                 self.current = try self.nextToken();
                 continue;
             }
@@ -758,7 +788,7 @@ pub const Parser = struct {
 
                 // Merge or add the root key. O(1) probe.
                 const root_key = path.items[0];
-                if (map.get(root_key)) |existing_value| {
+                if (header.map.get(root_key)) |existing_value| {
                     // Cannot extend an inline table that was defined with { ... } syntax
                     if (existing_value.* == .table and existing_value.table.is_closed_inline) {
                         self.parse_error = err.makeError(.TableRedefined, self.current.pos, "cannot extend inline table with dotted key");
@@ -771,42 +801,35 @@ pub const Parser = struct {
                     };
                 } else {
                     // root_key is arena-owned (P-5); no dupe.
-                    try map.put(alloc, root_key, current_table);
+                    try header.map.put(alloc, root_key, current_table);
                 }
             } else {
                 // Check for duplicate key. O(1).
-                if (map.contains(path.items[0])) {
+                if (header.map.contains(path.items[0])) {
                     self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "duplicate key in inline table");
                     return error.ParseFailed;
                 }
-                try map.put(alloc, path.items[0], value);
+                try header.map.put(alloc, path.items[0], value);
             }
 
-            // Skip whitespace/newlines
+            // Skip whitespace/newlines (tracking, not rejecting).
             while (self.current.tag == .newline or self.current.tag == .comment) {
-                if (self.options.version == .v1_0_0 and self.current.tag == .newline) {
-                    self.parse_error = err.makeError(.InlineTableNewlineNotAllowed, self.current.pos, "newlines not allowed in inline tables in TOML v1.0");
-                    return error.ParseFailed;
-                }
+                if (self.current.tag == .newline) saw_newline_inside.* = true;
                 self.current = try self.nextToken();
             }
 
             if (self.current.tag == .comma) {
                 self.current = try self.nextToken();
 
-                // Skip whitespace/newlines after comma
+                // Skip whitespace/newlines after comma.
                 while (self.current.tag == .newline or self.current.tag == .comment) {
-                    if (self.options.version == .v1_0_0 and self.current.tag == .newline) {
-                        self.parse_error = err.makeError(.InlineTableNewlineNotAllowed, self.current.pos, "newlines not allowed in inline tables in TOML v1.0");
-                        return error.ParseFailed;
-                    }
+                    if (self.current.tag == .newline) saw_newline_inside.* = true;
                     self.current = try self.nextToken();
                 }
 
-                // Check for trailing comma in v1.0
-                if (self.current.tag == .right_brace and self.options.version == .v1_0_0) {
-                    self.parse_error = err.makeError(.InlineTableTrailingCommaNotAllowed, start_pos, "trailing comma not allowed in inline tables in TOML v1.0");
-                    return error.ParseFailed;
+                // Trailing comma: flag for post-body validation.
+                if (self.current.tag == .right_brace) {
+                    saw_trailing_comma.* = true;
                 }
             } else if (self.current.tag != .right_brace) {
                 // No comma and not closing brace - error
@@ -820,8 +843,31 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
         self.current = try self.nextToken();
+    }
 
-        return Value{ .table = .{ .map = map, .is_inline = true, .is_closed_inline = true } };
+    fn validateInlineTableV10Restrictions(
+        self: *Parser,
+        header: *const InlineTableHeader,
+        saw_trailing_comma: bool,
+        saw_newline_inside: bool,
+    ) ParseValueError!void {
+        if (self.options.version != .v1_0_0) return;
+        if (saw_trailing_comma) {
+            self.parse_error = err.makeError(
+                .InlineTableTrailingCommaNotAllowed,
+                header.open_pos,
+                "trailing comma not allowed in inline tables in TOML v1.0",
+            );
+            return error.ParseFailed;
+        }
+        if (saw_newline_inside) {
+            self.parse_error = err.makeError(
+                .InlineTableNewlineNotAllowed,
+                header.open_pos,
+                "newlines not allowed in inline tables in TOML v1.0",
+            );
+            return error.ParseFailed;
+        }
     }
 
     fn mergeTables(alloc: Allocator, target: *Value, source: *Value) error{ ParseFailed, OutOfMemory }!void {

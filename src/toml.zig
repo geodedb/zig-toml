@@ -423,3 +423,47 @@ test "U-B2 input buffer may be freed before Document.deinit (P-5)" {
     const pool = db.get("pool_size") orelse unreachable;
     try std.testing.expectEqual(@as(i64, 16), pool.integer);
 }
+
+test "parseInlineTable: v1.0 rejects trailing comma" {
+    const src = "t = { a = 1, }";
+    const alloc = std.testing.allocator;
+    if (parse(alloc, src, .{ .version = .v1_0_0 })) |doc| {
+        defer doc.deinit();
+        return error.TestExpectedError;
+    } else |e| {
+        try std.testing.expectEqual(error.ParseFailed, e);
+    }
+}
+
+test "parseInlineTable: v1.1 accepts trailing comma" {
+    const src = "t = { a = 1, }";
+    const alloc = std.testing.allocator;
+    const doc = try parse(alloc, src, .{ .version = .v1_1_0 });
+    defer doc.deinit();
+    const t = doc.root.get("t") orelse unreachable;
+    const a = t.get("a") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 1), a.integer);
+}
+
+test "parseInlineTable: v1.0 rejects newline inside" {
+    const src = "t = { a = 1,\n  b = 2 }";
+    const alloc = std.testing.allocator;
+    if (parse(alloc, src, .{ .version = .v1_0_0 })) |doc| {
+        defer doc.deinit();
+        return error.TestExpectedError;
+    } else |e| {
+        try std.testing.expectEqual(error.ParseFailed, e);
+    }
+}
+
+test "parseInlineTable: v1.1 accepts newline inside" {
+    const src = "t = { a = 1,\n  b = 2 }";
+    const alloc = std.testing.allocator;
+    const doc = try parse(alloc, src, .{ .version = .v1_1_0 });
+    defer doc.deinit();
+    const t = doc.root.get("t") orelse unreachable;
+    const a = t.get("a") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 1), a.integer);
+    const b = t.get("b") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 2), b.integer);
+}
