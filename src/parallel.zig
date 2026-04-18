@@ -798,3 +798,89 @@ test "U-F no dropped inputs past MAX_CHUNKS - extractKeys" {
         if (result.keys) |keys| allocator.free(keys);
     }
 }
+
+// ============================================================================
+// GAP-0001: Differential test — parallel.parseDocuments MUST agree with
+// toml.parseWithError on both valid and invalid inputs. This test pins the
+// contract that parallel path == serial path for accept/reject decisions.
+// Before the shadow parser is removed, several xfail fixtures below will
+// make this test fail red (the shadow parser accepts inputs the real
+// parser rejects). After Task 2 lands the test must pass green.
+// ============================================================================
+
+test "GAP-0001 parallel vs serial differential corpus" {
+    const allocator = std.testing.allocator;
+
+    const Case = struct {
+        input: []const u8,
+        expect_success: bool,
+        label: []const u8,
+    };
+
+    const corpus = [_]Case{
+        // --- valid inputs (must accept) ---
+        .{ .input = "a = 1\n", .expect_success = true, .label = "simple int" },
+        .{ .input = "name = \"zigtoml\"\n", .expect_success = true, .label = "simple string" },
+        .{ .input = "[table]\nk = 1\n", .expect_success = true, .label = "table header" },
+        .{ .input = "[[arr]]\nk = 1\n", .expect_success = true, .label = "array of tables" },
+        .{ .input = "pt = { x = 1, y = 2 }\n", .expect_success = true, .label = "inline table" },
+        .{ .input = "a.b.c = 1\n", .expect_success = true, .label = "dotted key" },
+        .{ .input = "s = \"\"\"hello\nworld\"\"\"\n", .expect_success = true, .label = "multiline basic string" },
+        .{ .input = "s = '''hello\nworld'''\n", .expect_success = true, .label = "multiline literal string" },
+        .{ .input = "arr = [1, 2, 3]\n", .expect_success = true, .label = "int array" },
+        .{ .input = "x = 0xDEADBEEF\n", .expect_success = true, .label = "hex int" },
+        // --- invalid inputs (must reject) ---
+        .{ .input = "a = = 1\n", .expect_success = false, .label = "double equals (S-1)" },
+        .{ .input = "[unclosed table\n", .expect_success = false, .label = "unclosed table header (S-1)" },
+        .{ .input = "a = 1\na = 2\n", .expect_success = false, .label = "duplicate key (S-1)" },
+        .{ .input = "a = \"unterminated\n", .expect_success = false, .label = "unterminated string (S-2)" },
+        .{ .input = "a = \"bad\\q\"\n", .expect_success = false, .label = "invalid escape" },
+        .{ .input = "a = 01\n", .expect_success = false, .label = "leading zero on int" },
+        .{ .input = "a = 1.\n", .expect_success = false, .label = "trailing dot on float" },
+        .{ .input = "dt = 2024-13-40T99:99:99Z\n", .expect_success = false, .label = "nonsense datetime" },
+        .{ .input = "arr = [1, \"two\"]\n", .expect_success = false, .label = "mixed array types (v1.0 behavior ok; v1.1 ok too — treat as accept)" },
+        .{ .input = "a = \"bare\x00null\"\n", .expect_success = false, .label = "null in string (S-3)" },
+    };
+
+    // NOTE: the "mixed array types" case flips accept/reject across TOML
+    // versions. Under v1.1.0 defaults (parser's default), heterogeneous
+    // arrays are allowed, so the baseline expectation is `true`. Flip to
+    // `true` here so the test stays stable.
+    var adjusted: [corpus.len]Case = corpus;
+    adjusted[18].expect_success = true;
+
+    var inputs: [adjusted.len][]const u8 = undefined;
+    for (adjusted, 0..) |c, i| inputs[i] = c.input;
+
+    var results: [adjusted.len]ParseResult = undefined;
+    parseDocuments(allocator, &inputs, &results);
+    defer {
+        for (&results) |*r| if (r.doc) |*d| d.deinit();
+    }
+
+    for (adjusted, 0..) |c, i| {
+        // Compute the serial oracle answer.
+        const oracle = toml.parseWithError(allocator, c.input, .{});
+        var oracle_success: bool = false;
+        switch (oracle) {
+            .ok => |*d| {
+                oracle_success = true;
+                var doc = @constCast(d);
+                doc.deinit();
+            },
+            .err => {},
+        }
+
+        // Both the corpus-labeled expectation and the oracle must agree.
+        try std.testing.expectEqual(c.expect_success, oracle_success);
+
+        // And parallel must agree with serial.
+        if (results[i].success != oracle_success) {
+            std.debug.print(
+                "\nGAP-0001 divergence at case[{d}] '{s}':\n  input  = {s}\n  parallel.success = {}\n  serial.success   = {}\n",
+                .{ i, c.label, c.input, results[i].success, oracle_success },
+            );
+            try std.testing.expect(false);
+        }
+    }
+}
