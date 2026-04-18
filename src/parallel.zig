@@ -776,13 +776,16 @@ fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyE
 
 test "parse document - valid" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{
         \\name = "test"
         \\version = "1.0.0"
     };
     var results: [1]ParseResult = undefined;
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -794,12 +797,15 @@ test "parse document - valid" {
 
 test "parse document - unclosed string" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{
         \\name = "unclosed
     };
     var results: [1]ParseResult = undefined;
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -812,6 +818,9 @@ test "parse document - unclosed string" {
 
 test "parse document - multiline string" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{
         \\desc = """
         \\This is a
@@ -820,7 +829,7 @@ test "parse document - multiline string" {
     };
     var results: [1]ParseResult = undefined;
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -829,22 +838,30 @@ test "parse document - multiline string" {
 }
 
 test "validate document - valid" {
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{
         \\[package]
         \\name = "test"
     };
     var results: [1]ValidateResult = undefined;
 
-    validateDocuments(&inputs, &results);
+    ctx.validateDocuments(&inputs, &results);
 
     try std.testing.expect(results[0].valid);
 }
 
 test "validate document - invalid utf8" {
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{&[_]u8{ 0xFF, 0xFE }};
     var results: [1]ValidateResult = undefined;
 
-    validateDocuments(&inputs, &results);
+    ctx.validateDocuments(&inputs, &results);
 
     try std.testing.expect(!results[0].valid);
     // Real parser emits ErrorCode.InvalidUtf8 (ordinal 0) -> code 1.
@@ -852,10 +869,14 @@ test "validate document - invalid utf8" {
 }
 
 test "validate document - null byte" {
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{"name\x00= \"test\""};
     var results: [1]ValidateResult = undefined;
 
-    validateDocuments(&inputs, &results);
+    ctx.validateDocuments(&inputs, &results);
 
     try std.testing.expect(!results[0].valid);
     // Real parser emits an UnexpectedToken or InvalidControlCharacter
@@ -868,6 +889,10 @@ test "Q-2 validate document rejects grammar-invalid input" {
     // and bracket depth. It silently accepted grammar errors like
     // `a = = 1`. After Q-2 the validator routes through the real parser
     // and must reject all inputs the real parser rejects.
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const grammar_invalid = [_][]const u8{
         "a = = 1\n",
         "[unclosed\n",
@@ -875,7 +900,7 @@ test "Q-2 validate document rejects grammar-invalid input" {
         "a = \"bad\\q\"\n",
     };
     var results: [grammar_invalid.len]ValidateResult = undefined;
-    validateDocuments(&grammar_invalid, &results);
+    ctx.validateDocuments(&grammar_invalid, &results);
 
     for (results, 0..) |r, i| {
         if (r.valid) {
@@ -890,13 +915,16 @@ test "Q-2 validate document rejects grammar-invalid input" {
 
 test "extract keys - basic" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{
         \\name = "test"
         \\version = "1.0"
     };
     var results: [1]KeyExtractResult = undefined;
 
-    extractKeys(allocator, &inputs, &results);
+    ctx.extractKeys(&inputs, &results);
 
     try std.testing.expect(results[0].success);
     try std.testing.expectEqual(@as(usize, 2), results[0].count);
@@ -908,10 +936,13 @@ test "extract keys - basic" {
 
 test "extract keys - empty document" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{"# Just a comment"};
     var results: [1]KeyExtractResult = undefined;
 
-    extractKeys(allocator, &inputs, &results);
+    ctx.extractKeys(&inputs, &results);
 
     try std.testing.expect(results[0].success);
     try std.testing.expectEqual(@as(usize, 0), results[0].count);
@@ -924,6 +955,9 @@ test "GAP-0001 extractKeys uses real parser — inline tables + quoted keys" {
     // recognize inline tables. It also mishandled quoted keys
     // containing `=` and dotted keys.
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{
         // Inline table: only `pt` is top-level. Old extractor returned
         // pt, x, y.
@@ -938,7 +972,7 @@ test "GAP-0001 extractKeys uses real parser — inline tables + quoted keys" {
         "a.b.c = 1\n",
     };
     var results: [inputs.len]KeyExtractResult = undefined;
-    extractKeys(allocator, &inputs, &results);
+    ctx.extractKeys(&inputs, &results);
     defer for (&results) |*r| if (r.keys) |k| allocator.free(k);
 
     // Case 0: inline table + sibling key.
@@ -967,13 +1001,16 @@ test "GAP-0001 extractKeys uses real parser — inline tables + quoted keys" {
 
 test "parallel parse - large batch" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     var inputs: [16][]const u8 = undefined;
     for (&inputs) |*input| {
         input.* = "key = \"value\"";
     }
     var results: [16]ParseResult = undefined;
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -985,13 +1022,17 @@ test "parallel parse - large batch" {
 }
 
 test "parallel validate - large batch" {
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     var inputs: [16][]const u8 = undefined;
     for (&inputs) |*input| {
         input.* = "[table]\nkey = \"value\"";
     }
     var results: [16]ValidateResult = undefined;
 
-    validateDocuments(&inputs, &results);
+    ctx.validateDocuments(&inputs, &results);
 
     for (results) |result| {
         try std.testing.expect(result.valid);
@@ -1000,13 +1041,16 @@ test "parallel validate - large batch" {
 
 test "parallel extract keys - large batch" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     var inputs: [16][]const u8 = undefined;
     for (&inputs) |*input| {
         input.* = "name = \"test\"\nversion = \"1.0\"";
     }
     var results: [16]KeyExtractResult = undefined;
 
-    extractKeys(allocator, &inputs, &results);
+    ctx.extractKeys(&inputs, &results);
 
     for (results) |result| {
         try std.testing.expect(result.success);
@@ -1036,10 +1080,13 @@ test "parallel extract keys - large batch" {
 
 test "U-M aligned with toml.parse: double equals rejected" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{"a = = 1\n"};
     var results: [1]ParseResult = undefined;
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -1051,10 +1098,13 @@ test "U-M aligned with toml.parse: double equals rejected" {
 
 test "U-M aligned with toml.parse: unclosed table rejected" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{"[unclosed table\n"};
     var results: [1]ParseResult = undefined;
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -1065,10 +1115,13 @@ test "U-M aligned with toml.parse: unclosed table rejected" {
 
 test "U-M aligned with toml.parse: duplicate keys rejected" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const inputs = [_][]const u8{"a = 1\na = 2\n"};
     var results: [1]ParseResult = undefined;
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -1102,6 +1155,9 @@ test "U-M baseline: toml.parse rejects all U-M fixtures" {
 
 test "U-F no dropped inputs past MAX_CHUNKS - parseDocuments" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const N = 100;
     var inputs: [N][]const u8 = undefined;
     for (&inputs) |*input| input.* = "key = \"value\"";
@@ -1120,7 +1176,7 @@ test "U-F no dropped inputs past MAX_CHUNKS - parseDocuments" {
         };
     }
 
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -1134,6 +1190,10 @@ test "U-F no dropped inputs past MAX_CHUNKS - parseDocuments" {
 }
 
 test "U-F no dropped inputs past MAX_CHUNKS - validateDocuments" {
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const N = 100;
     var inputs: [N][]const u8 = undefined;
     for (&inputs) |*input| input.* = "[table]\nkey = \"value\"";
@@ -1143,7 +1203,7 @@ test "U-F no dropped inputs past MAX_CHUNKS - validateDocuments" {
         r.* = .{ .valid = false, .error_code = 0xFF, .error_msg = null };
     }
 
-    validateDocuments(&inputs, &results);
+    ctx.validateDocuments(&inputs, &results);
 
     for (results) |result| {
         try std.testing.expect(result.error_code != 0xFF);
@@ -1153,6 +1213,9 @@ test "U-F no dropped inputs past MAX_CHUNKS - validateDocuments" {
 
 test "U-F no dropped inputs past MAX_CHUNKS - extractKeys" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
     const N = 100;
     var inputs: [N][]const u8 = undefined;
     for (&inputs) |*input| input.* = "name = \"test\"\nversion = \"1.0\"";
@@ -1163,7 +1226,7 @@ test "U-F no dropped inputs past MAX_CHUNKS - extractKeys" {
         r.* = .{ .keys = null, .count = std.math.maxInt(usize), .success = false };
     }
 
-    extractKeys(allocator, &inputs, &results);
+    ctx.extractKeys(&inputs, &results);
 
     for (results) |result| {
         try std.testing.expect(result.count != std.math.maxInt(usize));
@@ -1184,6 +1247,8 @@ test "U-F no dropped inputs past MAX_CHUNKS - extractKeys" {
 
 test "GAP-0001 parallel vs serial differential corpus" {
     const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
 
     const Case = struct {
         input: []const u8,
@@ -1220,7 +1285,7 @@ test "GAP-0001 parallel vs serial differential corpus" {
     for (corpus, 0..) |c, i| inputs[i] = c.input;
 
     var results: [corpus.len]ParseResult = undefined;
-    parseDocuments(allocator, &inputs, &results);
+    ctx.parseDocuments(&inputs, &results);
     defer {
         for (&results) |*r| if (r.doc) |d| d.deinit();
     }
@@ -1300,4 +1365,31 @@ test "Q-4 concurrent parseDocuments calls on shared ParallelContext" {
     t1.join();
     t2.join();
     t3.join();
+}
+
+test "legacy deprecated: parseDocuments free function still works" {
+    const allocator = std.testing.allocator;
+    const inputs = [_][]const u8{"a = 1\n"} ** 8;
+    var results: [8]ParseResult = undefined;
+    parseDocuments(allocator, &inputs, &results);
+    defer for (&results) |*r| if (r.doc) |d| d.deinit();
+    for (results) |r| try std.testing.expect(r.success);
+}
+
+test "legacy deprecated: validateDocuments free function still works" {
+    const inputs = [_][]const u8{"a = 1\n"} ** 8;
+    var results: [8]ValidateResult = undefined;
+    validateDocuments(&inputs, &results);
+    for (results) |r| try std.testing.expect(r.valid);
+}
+
+test "legacy deprecated: extractKeys free function still works" {
+    const allocator = std.testing.allocator;
+    const inputs = [_][]const u8{"k = 1\n"} ** 8;
+    var results: [8]KeyExtractResult = undefined;
+    extractKeys(allocator, &inputs, &results);
+    for (results) |r| {
+        try std.testing.expect(r.success);
+        if (r.keys) |keys| allocator.free(keys);
+    }
 }
