@@ -88,6 +88,13 @@ pub fn makeError(code: ErrorCode, pos: Position, comptime message: []const u8) P
 }
 
 /// Create a parse error with a dynamic message.
+///
+/// INVARIANT: Callers MUST ensure any dynamic `message` outlives every
+/// consumer of the returned `ParseError`. In particular,
+/// `parallel.validateDocument` carries `pe.message` past a per-call arena —
+/// using `makeErrorDynamic` with arena-scoped bytes there will UAF once the
+/// arena is freed. Prefer `makeError` (comptime literal) unless you can
+/// prove the message storage outlives every downstream reader.
 pub fn makeErrorDynamic(code: ErrorCode, pos: Position, message: []const u8) ParseError {
     return .{
         .code = code,
