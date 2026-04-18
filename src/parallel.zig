@@ -1250,3 +1250,22 @@ test "GAP-0001 parallel vs serial differential corpus" {
         }
     }
 }
+
+test "Q-4/S-4 ParallelContext is a caller-owned struct" {
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
+    // Smoke: parseDocuments through the ctx entry point.
+    const inputs = [_][]const u8{
+        "a = 1\n",
+        "b = 2\n",
+        "c = 3\n",
+        "d = 4\n",
+    };
+    var results: [4]ParseResult = undefined;
+    ctx.parseDocuments(&inputs, &results);
+    defer for (&results) |*r| if (r.doc) |d| d.deinit();
+
+    for (results) |r| try std.testing.expect(r.success);
+}
