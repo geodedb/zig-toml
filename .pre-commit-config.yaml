@@ -104,7 +104,7 @@ repos:
     files: \.zig$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
     pass_filenames: false
-    args: [src/, build.zig]
+    args: [src/, tests/, examples/, build.zig]
 
       # Zig build check (compilation)
   - id: zig-build
@@ -126,14 +126,32 @@ repos:
     pass_filenames: false
     stages: [pre-push]      # Only on push, may be slow
 
-      # Check for TODO/FIXME in committed code (warning only)
+      # Block commits that introduce TODO/FIXME/XXX/HACK markers in Zig
+      # source. The previous version always exited 0 ("warning only"),
+      # which made it pure theater. Now it fails the hook so the marker
+      # must either be addressed before commit or the line explicitly
+      # excluded (see ALLOW_TODO suffix below).
+      #
+      # Escape hatch: append `// ALLOW_TODO: <reason>` on the same line
+      # to document why the marker is staying. Those lines are filtered
+      # out before the grep so intentional leaves pass through.
   - id: check-todos
     name: check for TODOs/FIXMEs
     entry: bash
     args:
     - -c
     - |
-      git diff --cached --name-only | xargs grep -l -E "(TODO|FIXME|XXX|HACK)" 2>/dev/null && echo "Warning: Found TODO/FIXME markers in staged files" && exit 0 || exit 0
+      staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(zig|zon)$' || true)
+      if [ -z "$staged" ]; then exit 0; fi
+      # shellcheck disable=SC2086
+      offenders=$(grep -nE '\b(TODO|FIXME|XXX|HACK)\b' $staged 2>/dev/null | grep -v 'ALLOW_TODO' || true)
+      if [ -n "$offenders" ]; then
+        echo "error: TODO/FIXME/XXX/HACK markers found in staged Zig files:" >&2
+        echo "$offenders" >&2
+        echo "Address the marker or append '// ALLOW_TODO: <reason>' on the same line." >&2
+        exit 1
+      fi
+      exit 0
     language: system
     pass_filenames: false
     verbose: true
