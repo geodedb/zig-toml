@@ -288,6 +288,81 @@ pub const ParseResult = struct {
 
 const MAX_CHUNKS = 64;
 
+/// Fan-out a batch of inputs across the supplied thread pool.
+///
+/// This is the single DRY implementation of the chunk / submitBatch /
+/// WaitGroup fan-out pattern used by `parseDocumentsCtx`,
+/// `validateDocumentsCtx`, `extractKeysCtx`, and the deprecated legacy
+/// free-function shims. Callers stay in charge of the sequential
+/// fast-path threshold and of resolving the pool pointer; `runBatch`
+/// is only invoked on the parallel path.
+///
+/// Type parameters:
+/// - `Chunk`: per-chunk context struct the worker casts `ctx_ptr` to.
+///
+/// Runtime parameters:
+/// - `pool`: the thread pool to schedule on.
+/// - `state`: opaque per-call state (typically the caller's allocator
+///   or `ParallelContext`) forwarded to `makeChunk` / `sequentialOne`.
+///   Passed by value so concurrent callers each get their own copy;
+///   this is what lets `runBatch` stay safe under the Q-4 concurrent
+///   `parseDocuments` stress test without a global staging var.
+/// - `inputs`: the full input slice.
+/// - `results`: the full results slice (same length as inputs).
+/// - `task_fn`: thread-pool worker function for a single chunk.
+/// - `makeChunk`: builds a `Chunk` from `state` and the input / result
+///   sub-slices.
+/// - `sequentialOne`: fallback processor invoked per input when
+///   `pool.submitBatch` fails.
+///
+/// Invariants:
+/// - Ceiling-division chunk sizing guarantees every input lands in
+///   exactly one chunk even when `inputs.len > MAX_CHUNKS`
+///   (regression U-F).
+/// - The chunk / batch arrays live on the current stack frame; `Chunk`
+///   therefore must not outlive this call.
+fn runBatch(
+    comptime Chunk: type,
+    pool: *tp.ThreadPool,
+    state: anytype,
+    inputs: []const []const u8,
+    results: anytype,
+    comptime task_fn: fn (ctx_ptr: *anyopaque, tc: *tp.TaskContext) void,
+    comptime makeChunk: fn (
+        state: @TypeOf(state),
+        slice_inputs: []const []const u8,
+        slice_results: @TypeOf(results),
+    ) Chunk,
+    comptime sequentialOne: fn (
+        state: @TypeOf(state),
+        input: []const u8,
+        out: *std.meta.Elem(@TypeOf(results)),
+    ) void,
+) void {
+    // Ceiling division ensures every input is placed into exactly one chunk.
+    // Floor (inputs.len / MAX_CHUNKS) would silently drop the last
+    // inputs.len % MAX_CHUNKS elements when inputs.len > MAX_CHUNKS,
+    // leaving the corresponding results[i] undefined (regression U-F).
+    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]Chunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len and n < MAX_CHUNKS) {
+        const end = @min(i + chunk_size, inputs.len);
+        chunks[n] = makeChunk(state, inputs[i..end], results[i..end]);
+        batch[n] = .{ .task_fn = &task_fn, .ctx = @ptrCast(&chunks[n]) };
+        n += 1;
+        i = end;
+    }
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        for (inputs, 0..) |input, j| sequentialOne(state, input, &results[j]);
+        return;
+    };
+    wg.wait();
+}
+
 const ParseChunk = struct {
     allocator: std.mem.Allocator,
     inputs: []const []const u8,
@@ -327,30 +402,36 @@ pub fn parseDocumentsCtx(
         return;
     }
 
-    const pool = ctx.pool;
-    // Ceiling division ensures every input is placed into exactly one chunk.
-    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
-    var chunks: [MAX_CHUNKS]ParseChunk = undefined;
-    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < inputs.len and n < MAX_CHUNKS) {
-        const end = @min(i + chunk_size, inputs.len);
-        chunks[n] = .{
-            .allocator = ctx.allocator,
-            .inputs = inputs[i..end],
-            .results = results[i..end],
-        };
-        batch[n] = .{ .task_fn = &parseChunkTask, .ctx = @ptrCast(&chunks[n]) };
-        n += 1;
-        i = end;
-    }
-    var wg = pool.waitGroup();
-    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
-        for (inputs, 0..) |input, j| results[j] = parseDocument(ctx.allocator, input);
-        return;
+    runBatch(
+        ParseChunk,
+        ctx.pool,
+        ctx.allocator,
+        inputs,
+        results,
+        parseChunkTask,
+        parseMakeChunk,
+        parseSequentialOne,
+    );
+}
+
+fn parseMakeChunk(
+    allocator: std.mem.Allocator,
+    slice_inputs: []const []const u8,
+    slice_results: []ParseResult,
+) ParseChunk {
+    return .{
+        .allocator = allocator,
+        .inputs = slice_inputs,
+        .results = slice_results,
     };
-    wg.wait();
+}
+
+fn parseSequentialOne(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    out: *ParseResult,
+) void {
+    out.* = parseDocument(allocator, input);
 }
 
 /// Deprecated. Use `ParallelContext.parseDocuments` or
@@ -389,29 +470,16 @@ pub fn parseDocuments(
         return;
     };
 
-    const pool = legacy.pool;
-    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
-    var chunks: [MAX_CHUNKS]ParseChunk = undefined;
-    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < inputs.len and n < MAX_CHUNKS) {
-        const end = @min(i + chunk_size, inputs.len);
-        chunks[n] = .{
-            .allocator = allocator,
-            .inputs = inputs[i..end],
-            .results = results[i..end],
-        };
-        batch[n] = .{ .task_fn = &parseChunkTask, .ctx = @ptrCast(&chunks[n]) };
-        n += 1;
-        i = end;
-    }
-    var wg = pool.waitGroup();
-    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
-        for (inputs, 0..) |input, j| results[j] = parseDocument(allocator, input);
-        return;
-    };
-    wg.wait();
+    runBatch(
+        ParseChunk,
+        legacy.pool,
+        allocator,
+        inputs,
+        results,
+        parseChunkTask,
+        parseMakeChunk,
+        parseSequentialOne,
+    );
 }
 
 fn parseDocument(allocator: std.mem.Allocator, input: []const u8) ParseResult {
@@ -497,25 +565,34 @@ pub fn validateDocumentsCtx(
         return;
     }
 
-    const pool = ctx.pool;
-    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
-    var chunks: [MAX_CHUNKS]ValidateChunk = undefined;
-    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < inputs.len and n < MAX_CHUNKS) {
-        const end = @min(i + chunk_size, inputs.len);
-        chunks[n] = .{ .inputs = inputs[i..end], .results = results[i..end] };
-        batch[n] = .{ .task_fn = &validateChunkTask, .ctx = @ptrCast(&chunks[n]) };
-        n += 1;
-        i = end;
-    }
-    var wg = pool.waitGroup();
-    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
-        for (inputs, 0..) |input, j| results[j] = validateDocument(input);
-        return;
-    };
-    wg.wait();
+    // validateDocument needs no per-call state; pass a void sentinel so
+    // the makeChunk / sequentialOne signatures remain uniform.
+    runBatch(
+        ValidateChunk,
+        ctx.pool,
+        {},
+        inputs,
+        results,
+        validateChunkTask,
+        validateMakeChunk,
+        validateSequentialOne,
+    );
+}
+
+fn validateMakeChunk(
+    _: void,
+    slice_inputs: []const []const u8,
+    slice_results: []ValidateResult,
+) ValidateChunk {
+    return .{ .inputs = slice_inputs, .results = slice_results };
+}
+
+fn validateSequentialOne(
+    _: void,
+    input: []const u8,
+    out: *ValidateResult,
+) void {
+    out.* = validateDocument(input);
 }
 
 /// Deprecated. Use `ParallelContext.validateDocuments` or
@@ -635,29 +712,36 @@ pub fn extractKeysCtx(
         return;
     }
 
-    const pool = ctx.pool;
-    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
-    var chunks: [MAX_CHUNKS]KeyExtractChunk = undefined;
-    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < inputs.len and n < MAX_CHUNKS) {
-        const end = @min(i + chunk_size, inputs.len);
-        chunks[n] = .{
-            .allocator = ctx.allocator,
-            .inputs = inputs[i..end],
-            .results = results[i..end],
-        };
-        batch[n] = .{ .task_fn = &keyExtractChunkTask, .ctx = @ptrCast(&chunks[n]) };
-        n += 1;
-        i = end;
-    }
-    var wg = pool.waitGroup();
-    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
-        for (inputs, 0..) |input, j| results[j] = extractKeysFromDocument(ctx.allocator, input);
-        return;
+    runBatch(
+        KeyExtractChunk,
+        ctx.pool,
+        ctx.allocator,
+        inputs,
+        results,
+        keyExtractChunkTask,
+        keyExtractMakeChunk,
+        keyExtractSequentialOne,
+    );
+}
+
+fn keyExtractMakeChunk(
+    allocator: std.mem.Allocator,
+    slice_inputs: []const []const u8,
+    slice_results: []KeyExtractResult,
+) KeyExtractChunk {
+    return .{
+        .allocator = allocator,
+        .inputs = slice_inputs,
+        .results = slice_results,
     };
-    wg.wait();
+}
+
+fn keyExtractSequentialOne(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    out: *KeyExtractResult,
+) void {
+    out.* = extractKeysFromDocument(allocator, input);
 }
 
 /// Deprecated. Use `ParallelContext.extractKeys` or `extractKeysCtx`.
@@ -694,29 +778,16 @@ pub fn extractKeys(
         return;
     };
 
-    const pool = legacy.pool;
-    const chunk_size = @max(1, (inputs.len + MAX_CHUNKS - 1) / MAX_CHUNKS);
-    var chunks: [MAX_CHUNKS]KeyExtractChunk = undefined;
-    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < inputs.len and n < MAX_CHUNKS) {
-        const end = @min(i + chunk_size, inputs.len);
-        chunks[n] = .{
-            .allocator = allocator,
-            .inputs = inputs[i..end],
-            .results = results[i..end],
-        };
-        batch[n] = .{ .task_fn = &keyExtractChunkTask, .ctx = @ptrCast(&chunks[n]) };
-        n += 1;
-        i = end;
-    }
-    var wg = pool.waitGroup();
-    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
-        for (inputs, 0..) |input, j| results[j] = extractKeysFromDocument(allocator, input);
-        return;
-    };
-    wg.wait();
+    runBatch(
+        KeyExtractChunk,
+        legacy.pool,
+        allocator,
+        inputs,
+        results,
+        keyExtractChunkTask,
+        keyExtractMakeChunk,
+        keyExtractSequentialOne,
+    );
 }
 
 fn extractKeysFromDocument(allocator: std.mem.Allocator, input: []const u8) KeyExtractResult {
@@ -1398,5 +1469,67 @@ test "legacy deprecated: extractKeys free function still works" {
     for (results) |r| {
         try std.testing.expect(r.success);
         if (r.keys) |keys| allocator.free(keys);
+    }
+}
+
+test "Q-8 runBatch helper - distributes all inputs across chunks" {
+    // Drive the runBatch helper directly with a trivial "string length"
+    // workload to prove the fan-out primitive works in isolation of the
+    // parse/validate/extract callers. A 100-input batch (> MAX_CHUNKS = 64)
+    // also pins the ceiling-division chunk sizing so regressions mirroring
+    // U-F surface here first.
+    const allocator = std.testing.allocator;
+    var ctx = try ParallelContext.initDefault(allocator);
+    defer ctx.deinit();
+
+    const N = 100;
+    var inputs: [N][]const u8 = undefined;
+    for (&inputs) |*input| input.* = "abc";
+
+    var results: [N]usize = undefined;
+    for (&results) |*r| r.* = std.math.maxInt(usize);
+
+    const Chunk = struct {
+        inputs: []const []const u8,
+        results: []usize,
+    };
+
+    const Worker = struct {
+        fn run(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+            const chunk: *Chunk = @ptrCast(@alignCast(ctx_ptr));
+            for (chunk.inputs, 0..) |input, i| {
+                chunk.results[i] = input.len;
+            }
+        }
+
+        fn makeChunk(
+            _: void,
+            slice_inputs: []const []const u8,
+            slice_results: []usize,
+        ) Chunk {
+            return .{ .inputs = slice_inputs, .results = slice_results };
+        }
+
+        fn sequentialOne(_: void, input: []const u8, out: *usize) void {
+            out.* = input.len;
+        }
+    };
+
+    const inputs_slice: []const []const u8 = &inputs;
+    const results_slice: []usize = &results;
+    runBatch(
+        Chunk,
+        ctx.pool,
+        {},
+        inputs_slice,
+        results_slice,
+        Worker.run,
+        Worker.makeChunk,
+        Worker.sequentialOne,
+    );
+
+    for (results) |r| {
+        try std.testing.expect(r != std.math.maxInt(usize));
+        try std.testing.expectEqual(@as(usize, 3), r);
     }
 }

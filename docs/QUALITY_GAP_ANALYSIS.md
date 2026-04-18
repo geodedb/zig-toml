@@ -10,7 +10,8 @@ where severity weight Critical=5, High=4, Medium=3, Low=2, Info=1; blast_radius/
 
 - Fully closed: Q-10, Q-14, Q-15, Q-18 (moved to `docs/GAP_ANALYSIS_RESOLVED.md`)
 - Partially addressed: Q-9, Q-11 (docs landed; shadow parser U-A still open), Q-16 (leak gate landed; full matrix / coverage / API-drift still open)
-- Unchanged: Q-1, Q-2, Q-3, Q-4, Q-5, Q-6, Q-7, Q-8, Q-12, Q-13, Q-17
+- Unchanged: Q-1, Q-2, Q-3, Q-4, Q-5, Q-6, Q-7, Q-12, Q-13, Q-17
+- Closed (Plan 14): Q-8 runBatch helper extracted
 
 ## Summary
 
@@ -43,7 +44,7 @@ Note: Q-1 (Critical, PS 41.7) is structurally severe -- two parsers means every 
 | 5 | Medium | 45.0 | docs | Q-11 CHANGELOG / ROADMAP drift; parallel unmentioned | docs | CHANGELOG, docs/ROADMAP.md | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Reconcile CHANGELOG + ROADMAP against commits; add parallel entries | @benjiv | 2 d | Partial (25a49f2 + a5bf263) -- ROADMAP + CHANGELOG updated for parallel; underlying shadow parser remains |
 | 6 | Critical | 41.7 | api-contract | Q-1 parallel shadow parser diverges from parser.zig | parallel.zig, parser.zig | src/parallel.zig:165-239 | [#25](https://gitlab.com/devnw/zig/toml/-/work_items/25) | Extract parser.parseDocumentSlice; delete shadow parser; differential test | @benjiv | 2-3 wk | open |
 | 7 | High | 26.7 | architecture | Q-4 global pool lazy init + deinitPool UAF window + @panic | parallel.zig | src/parallel.zig:56-76 | [#33](https://gitlab.com/devnw/zig/toml/-/work_items/33) | Caller-owned Pool; return errors not @panic; deinit joins workers | @benjiv | 1-2 wk | open |
-| 8 | Medium | 22.5 | maintainability | Q-8 three 35-LOC near-identical submitBatch blocks | parallel.zig | src/parallel.zig:126-163/280-312/393-430 | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Extract submitBatchImpl(kind) generic | @benjiv | 3 d | open |
+| 8 | Medium | 22.5 | maintainability | Q-8 three 35-LOC near-identical submitBatch blocks | parallel.zig | src/parallel.zig:126-163/280-312/393-430 | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Extract submitBatchImpl(kind) generic | @benjiv | 3 d | Closed (Plan 14) -- runBatch comptime-generic helper owns ceiling-division chunking, submitBatch, sequential fallback, and WaitGroup wait; all 5 call-sites (3 Ctx + 2 legacy shims) delegate to it |
 | 9 | Medium | 22.5 | tests | Q-14 parallel tests all well-formed; no negative/diff cases | parallel.zig tests | tests/parallel_* | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Add negative + serial-vs-parallel differential tests | @benjiv | 3 d | Closed (befaff0) |
 | 10 | Low | 20.0 | maintainability | Q-18 MAX_CHUNKS=64 magic caps >64-core machines | parallel.zig | src/parallel.zig:100 | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Make configurable; default std.Thread.getCpuCount | @benjiv | 1 d | Closed (037a918) -- data-loss fix landed; configurability deferred (reopened if needed) |
 | 11 | Medium | 18.0 | api-contract | Q-12 Document-by-value invalidates arena on copy/move | value.zig, api | src/value.zig:198-217 | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Switch public API to Document pointer or mark non-copyable | @benjiv | 1 wk | open |
@@ -80,7 +81,7 @@ Note: Q-1 (Critical, PS 41.7) is structurally severe -- two parsers means every 
 - **Q-5** datetime 4 parallel parsers -- [#35](https://gitlab.com/devnw/zig/toml/-/work_items/35)
 - **Q-6** int/float 265 LOC, 7-nest -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
 - **Q-7** parseInlineTable 122 LOC -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
-- **Q-8** 3 near-identical submitBatch blocks -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
+- **Q-8** 3 near-identical submitBatch blocks -- **Closed** (Plan 14) runBatch helper extracted -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
 - **Q-18** MAX_CHUNKS=64 magic -- **Closed** commit `037a918` (data-loss fix; configurability deferred) -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
 
 ### architecture (2)
