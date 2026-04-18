@@ -154,10 +154,12 @@ const toml = @import("toml");
 var inputs: [32][]const u8 = undefined;
 for (&inputs) |*s| s.* = "key = \"value\"";
 
+var ctx = try toml.parallel.ParallelContext.initDefault(allocator);
+defer ctx.deinit();
+
 var results: [32]toml.parallel.ParseResult = undefined;
-toml.parallel.parseDocuments(allocator, &inputs, &results);
+ctx.parseDocuments(&inputs, &results);
 defer for (&results) |*r| if (r.doc) |d| d.deinit();
-defer toml.parallel.deinitPool();
 ```
 
 Every successful result carries the parsed `Document`; the caller owns
