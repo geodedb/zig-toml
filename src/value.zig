@@ -383,6 +383,73 @@ pub const Document = struct {
     pub fn allocator(self: *Document) Allocator {
         return self.arena.allocator();
     }
+
+    /// Set a value at a dotted key path, creating intermediate tables
+    /// as needed. Accepts input in the same form a user would type in
+    /// a TOML document (`"server.db.host"`).
+    ///
+    /// Dots inside quoted segments are NOT handled — this is the
+    /// library-level dotted key shape, not TOML's full quoted-key
+    /// grammar. For a segment containing a literal dot, use
+    /// `setPathSegments(&.{"literal.with.dots", ...}, value)`.
+    ///
+    /// Collision rules:
+    /// - If an intermediate segment already points at a non-table
+    ///   value, returns `error.PathCollision`.
+    /// - If the leaf key already exists, it is overwritten and the
+    ///   old value is leaked into the arena (arena-reclaim on deinit
+    ///   is sufficient for the typical use case).
+    ///
+    /// The `leaf` Value must already be allocated out of this
+    /// document's allocator (`doc.allocator()`).
+    pub fn setPath(
+        self: *Document,
+        path: []const u8,
+        leaf: *Value,
+    ) !void {
+        // Empty input is its own distinct error so callers can tell
+        // "no path given" apart from "malformed path with empty
+        // segment(s)". `splitScalar` on an empty slice yields a
+        // single empty segment — catch that first.
+        if (path.len == 0) return error.EmptyPath;
+
+        // Collect segments into a small stack buffer. TOML's practical
+        // nesting ceiling is well below 64 — the parser's default
+        // max_depth is similarly bounded.
+        var seg_buf: [64][]const u8 = undefined;
+        var n: usize = 0;
+        var it = std.mem.splitScalar(u8, path, '.');
+        while (it.next()) |seg| {
+            if (n == seg_buf.len) return error.PathTooDeep;
+            if (seg.len == 0) return error.EmptyPathSegment;
+            seg_buf[n] = seg;
+            n += 1;
+        }
+        if (n == 0) return error.EmptyPath;
+        try self.setPathSegments(seg_buf[0..n], leaf);
+    }
+
+    /// Segment-array counterpart of `setPath`. Mirrors the shape of
+    /// `Document.getPath`, which also takes `[]const []const u8`.
+    /// Use this when any segment contains a literal `.`.
+    pub fn setPathSegments(
+        self: *Document,
+        segments: []const []const u8,
+        leaf: *Value,
+    ) !void {
+        if (segments.len == 0) return error.EmptyPath;
+        const alloc = self.allocator();
+        var cursor: *Value = self.root;
+        var i: usize = 0;
+        while (i + 1 < segments.len) : (i += 1) {
+            if (cursor.* != .table) return error.PathCollision;
+            const next_val = try tableGetOrCreate(alloc, cursor, segments[i]);
+            if (next_val.* != .table) return error.PathCollision;
+            cursor = next_val;
+        }
+        if (cursor.* != .table) return error.PathCollision;
+        try tableSet(alloc, cursor, segments[segments.len - 1], leaf);
+    }
 };
 
 /// Create an empty Document on the given allocator. Used by tests and
@@ -792,4 +859,90 @@ test "U-V TableIter.reset allows two full passes" {
     var pass2: usize = 0;
     while (it.next()) |_| pass2 += 1;
     try std.testing.expectEqual(@as(usize, 2), pass2);
+}
+
+test "U-V Document.setPath creates intermediate tables and sets leaf" {
+    const doc = try createDocument(std.testing.allocator);
+    defer doc.deinit();
+
+    const leaf = try doc.allocator().create(Value);
+    leaf.* = .{ .integer = 42 };
+
+    try doc.setPath("a.b.c", leaf);
+
+    const path = &[_][]const u8{ "a", "b", "c" };
+    const got = doc.getPath(path) orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 42), got.integer);
+}
+
+test "U-V Document.setPath overwrites existing leaf" {
+    const doc = try createDocument(std.testing.allocator);
+    defer doc.deinit();
+
+    const first = try doc.allocator().create(Value);
+    first.* = .{ .integer = 1 };
+    try doc.setPath("x", first);
+
+    const second = try doc.allocator().create(Value);
+    second.* = .{ .integer = 2 };
+    try doc.setPath("x", second);
+
+    const path = &[_][]const u8{"x"};
+    const got = doc.getPath(path) orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 2), got.integer);
+}
+
+test "U-V Document.setPath collides with non-table intermediate" {
+    const doc = try createDocument(std.testing.allocator);
+    defer doc.deinit();
+
+    // Plant an integer at "a" so walking "a.b" must fail.
+    const scalar = try doc.allocator().create(Value);
+    scalar.* = .{ .integer = 7 };
+    try doc.setPath("a", scalar);
+
+    const leaf = try doc.allocator().create(Value);
+    leaf.* = .{ .integer = 99 };
+    const err = doc.setPath("a.b", leaf);
+    try std.testing.expectError(error.PathCollision, err);
+}
+
+test "U-V Document.setPath on empty doc with single segment" {
+    const doc = try createDocument(std.testing.allocator);
+    defer doc.deinit();
+
+    const leaf = try doc.allocator().create(Value);
+    leaf.* = .{ .string = "ok" };
+    try doc.setPath("only", leaf);
+
+    const path = &[_][]const u8{"only"};
+    const got = doc.getPath(path) orelse unreachable;
+    try std.testing.expectEqualStrings("ok", got.string);
+}
+
+test "U-V Document.setPath rejects empty and empty-segment paths" {
+    const doc = try createDocument(std.testing.allocator);
+    defer doc.deinit();
+
+    const leaf = try doc.allocator().create(Value);
+    leaf.* = .{ .integer = 0 };
+    try std.testing.expectError(error.EmptyPath, doc.setPath("", leaf));
+    try std.testing.expectError(error.EmptyPathSegment, doc.setPath("a..b", leaf));
+}
+
+test "U-V Document.setPathSegments allows segments containing dots" {
+    const doc = try createDocument(std.testing.allocator);
+    defer doc.deinit();
+
+    const leaf = try doc.allocator().create(Value);
+    leaf.* = .{ .integer = 123 };
+
+    // One of the segments literally contains a dot. The dotted-string
+    // form of setPath would split this incorrectly; setPathSegments
+    // preserves it.
+    const segs = &[_][]const u8{ "root", "v1.2.3", "value" };
+    try doc.setPathSegments(segs, leaf);
+
+    const got = doc.getPath(segs) orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 123), got.integer);
 }
