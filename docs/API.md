@@ -150,6 +150,8 @@ pub const ParseOptions = struct {
     version: TomlVersion = .v1_1_0,
     max_depth: u16 = 128,
     max_bytes: usize = 16 * 1024 * 1024,
+    max_keys: usize = 100_000,
+    max_values: usize = 500_000,
 };
 ```
 
@@ -160,6 +162,30 @@ pub const ParseOptions = struct {
 | version | TomlVersion | .v1_1_0 | TOML version for parsing |
 | max_depth | u16 | 128 | Maximum nesting depth for arrays/tables |
 | max_bytes | usize | 16 MB | Maximum input size in bytes |
+| max_keys | usize | 100_000 | Maximum total keys across all tables |
+| max_values | usize | 500_000 | Maximum `*Value` nodes allocated by the parser |
+
+#### Resource Limits
+
+The parser enforces per-parse caps that defend against pathological
+inputs (CWE-400 / CWE-789 memory amplification -- see S-9 hardening).
+
+- `max_keys` -- hard cap on the total number of keys the parser creates
+  across all tables. Each `parseKeyValue` call charges one unit. When
+  the cap is exceeded the parser returns `ErrorCode.ResourceLimitExceeded`
+  with the byte/line/column of the offending key. Defends against
+  pathological flat inputs (e.g., 16 MiB of `k0=0\nk1=0\n...`).
+- `max_values` -- hard cap on the total number of `*Value` nodes the
+  parser allocates (scalars, arrays, tables, array elements, root
+  table). Each `*Value` allocation site in `parser.zig` charges one
+  unit. On overflow the parser returns `ErrorCode.ResourceLimitExceeded`
+  at the offending token position. Defends against single-key
+  allocation blow-ups (e.g., `arr = [0, 1, 2, ...]` with millions of
+  elements).
+
+Callers who expect larger documents (>100k keys or >500k values)
+should raise these fields explicitly in their `ParseOptions` literal.
+The defaults cover every file the TOML compliance corpus ships.
 
 ---
 
@@ -550,8 +576,13 @@ Default limits can be configured via ParseOptions:
 |-------|---------|-------------|
 | max_depth | 128 | Maximum nesting depth |
 | max_bytes | 16 MB | Maximum input size |
+| max_keys | 100_000 | Maximum total keys across all tables |
+| max_values | 500_000 | Maximum `*Value` nodes the parser allocates |
 
-Exceeding limits returns `ErrorCode.LimitExceeded`.
+Exceeding `max_depth` / `max_bytes` returns `ErrorCode.LimitExceeded`.
+Exceeding `max_keys` / `max_values` returns
+`ErrorCode.ResourceLimitExceeded` with position information on the
+offending token.
 
 ## Parallel (Batch) API
 
