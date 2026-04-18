@@ -24,6 +24,15 @@ pub const ParseOptions = struct {
     version: TomlVersion = .v1_1_0,
     max_depth: u16 = 128,
     max_bytes: usize = 16 * 1024 * 1024,
+    /// Maximum total number of keys the parser may create across all
+    /// tables (top-level + nested + inline). Hard-caps pathological
+    /// inputs such as 16 MiB of `k0=0\nk1=0\n...`. Bumps are charged
+    /// once per parseKeyValue call.
+    max_keys: usize = 100_000,
+    /// Maximum total number of `*Value` nodes the parser may allocate.
+    /// Covers scalar values, arrays, tables, and array-of-tables nodes.
+    /// Bumps are charged at every allocation site.
+    max_values: usize = 500_000,
 };
 
 pub const Parser = struct {
@@ -1681,3 +1690,16 @@ pub const Parser = struct {
         return self.peeked.?;
     }
 };
+
+test "S-9 ParseOptions exposes max_keys and max_values caps" {
+    const opts = ParseOptions{
+        .max_keys = 42,
+        .max_values = 84,
+    };
+    try std.testing.expectEqual(@as(usize, 42), opts.max_keys);
+    try std.testing.expectEqual(@as(usize, 84), opts.max_values);
+    // Defaults: confirm sensible ceilings exist.
+    const def = ParseOptions{};
+    try std.testing.expect(def.max_keys >= 100_000);
+    try std.testing.expect(def.max_values >= 500_000);
+}
