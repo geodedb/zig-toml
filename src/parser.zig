@@ -485,11 +485,11 @@ pub const Parser = struct {
                 self.current = try self.nextToken();
             },
             .integer => {
-                result.* = .{ .integer = try self.parseInteger(self.current.slice(self.input)) };
+                result.* = .{ .integer = try self.parseInteger(alloc, self.current.slice(self.input)) };
                 self.current = try self.nextToken();
             },
             .float => {
-                result.* = .{ .float = try self.parseFloat(self.current.slice(self.input)) };
+                result.* = .{ .float = try self.parseFloat(alloc, self.current.slice(self.input)) };
                 self.current = try self.nextToken();
             },
             .bool_true => {
@@ -968,16 +968,16 @@ pub const Parser = struct {
         return string.decodeEscapeChar(self, alloc, content, i, result);
     }
 
-    fn parseInteger(self: *Parser, raw: []const u8) !i64 {
-        return number.parseInteger(self, raw);
+    fn parseInteger(self: *Parser, alloc: Allocator, raw: []const u8) !i64 {
+        return number.parseInteger(self, alloc, raw);
     }
 
     fn validateIntegerFormat(self: *Parser, raw: []const u8) !void {
         return number.validateIntegerFormat(self, raw);
     }
 
-    fn parseFloat(self: *Parser, raw: []const u8) !f64 {
-        return number.parseFloat(self, raw);
+    fn parseFloat(self: *Parser, alloc: Allocator, raw: []const u8) !f64 {
+        return number.parseFloat(self, alloc, raw);
     }
 
     fn validateFloatFormat(self: *Parser, raw: []const u8) !void {

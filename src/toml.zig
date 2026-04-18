@@ -572,3 +572,21 @@ test "array items are stored by value" {
     const Elem = @TypeOf(arr.array.items.items[0]);
     try std.testing.expect(@typeInfo(Elem) != .pointer);
 }
+
+test "hex integer longer than 64 digits parses (fits i64 after underscore strip)" {
+    const input =
+        "n = 0x0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_7F_FF_FF_FF_FF_FF_FF_FF\n";
+    var doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+    const n = doc.root.get("n") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 0x7FFFFFFFFFFFFFFF), n.integer);
+}
+
+test "float with many underscore separators parses" {
+    const input =
+        "f = 1_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000.0\n";
+    var doc = try parse(std.testing.allocator, input, .{});
+    defer doc.deinit();
+    const f = doc.root.get("f") orelse unreachable;
+    try std.testing.expect(f.float > 0.0);
+}

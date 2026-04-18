@@ -6,16 +6,17 @@
 const std = @import("std");
 const err = @import("../error.zig");
 const ErrorCode = err.ErrorCode;
+const Allocator = std.mem.Allocator;
 
 const Parser = @import("../parser.zig").Parser;
 
-pub fn parseInteger(self: *Parser, raw: []const u8) !i64 {
+pub fn parseInteger(self: *Parser, alloc: Allocator, raw: []const u8) !i64 {
     // Validate integer format
     try validateIntegerFormat(self, raw);
 
-    // Remove underscores
-    var clean: [64]u8 = undefined;
-    var clean_len: usize = 0;
+    // Remove underscores. Grow as needed; the configured max_bytes limit
+    // caps pathological inputs so we cannot exhaust memory here.
+    var clean: std.ArrayList(u8) = try .initCapacity(alloc, 64);
 
     var base: u8 = 10;
     var start: usize = 0;
@@ -45,27 +46,26 @@ pub fn parseInteger(self: *Parser, raw: []const u8) !i64 {
 
     for (raw[start..]) |c| {
         if (c != '_') {
-            if (clean_len >= clean.len) {
-                self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "integer too long");
+            if (clean.items.len >= self.options.max_bytes) {
+                self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "integer exceeds max_bytes");
                 return error.ParseFailed;
             }
-            clean[clean_len] = c;
-            clean_len += 1;
+            try clean.append(alloc, c);
         }
     }
 
     if (negative) {
-        // For negative numbers, include the minus sign in parsing to handle i64.MIN correctly
-        var neg_buf: [65]u8 = undefined;
-        neg_buf[0] = '-';
-        @memcpy(neg_buf[1 .. clean_len + 1], clean[0..clean_len]);
-        const result = std.fmt.parseInt(i64, neg_buf[0 .. clean_len + 1], base) catch {
+        // For negative numbers, include the minus sign in parsing to handle i64.MIN correctly.
+        var neg_buf: std.ArrayList(u8) = try .initCapacity(alloc, clean.items.len + 1);
+        try neg_buf.append(alloc, '-');
+        try neg_buf.appendSlice(alloc, clean.items);
+        const result = std.fmt.parseInt(i64, neg_buf.items, base) catch {
             self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "invalid integer");
             return error.ParseFailed;
         };
         return result;
     } else {
-        const result = std.fmt.parseInt(i64, clean[0..clean_len], base) catch {
+        const result = std.fmt.parseInt(i64, clean.items, base) catch {
             self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "invalid integer");
             return error.ParseFailed;
         };
@@ -146,7 +146,7 @@ pub fn validateIntegerFormat(self: *Parser, raw: []const u8) !void {
     }
 }
 
-pub fn parseFloat(self: *Parser, raw: []const u8) !f64 {
+pub fn parseFloat(self: *Parser, alloc: Allocator, raw: []const u8) !f64 {
     // Handle special values
     if (std.mem.eql(u8, raw, "inf") or std.mem.eql(u8, raw, "+inf")) return std.math.inf(f64);
     if (std.mem.eql(u8, raw, "-inf")) return -std.math.inf(f64);
@@ -156,22 +156,20 @@ pub fn parseFloat(self: *Parser, raw: []const u8) !f64 {
     // Validate float format
     try validateFloatFormat(self, raw);
 
-    // Remove underscores
-    var clean: [128]u8 = undefined;
-    var clean_len: usize = 0;
+    // Remove underscores. Grow as needed; max_bytes caps pathological inputs.
+    var clean: std.ArrayList(u8) = try .initCapacity(alloc, 128);
 
     for (raw) |c| {
         if (c != '_') {
-            if (clean_len >= clean.len) {
-                self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "float too long");
+            if (clean.items.len >= self.options.max_bytes) {
+                self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "float exceeds max_bytes");
                 return error.ParseFailed;
             }
-            clean[clean_len] = c;
-            clean_len += 1;
+            try clean.append(alloc, c);
         }
     }
 
-    return std.fmt.parseFloat(f64, clean[0..clean_len]) catch {
+    return std.fmt.parseFloat(f64, clean.items) catch {
         self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "invalid float");
         return error.ParseFailed;
     };
