@@ -250,6 +250,40 @@ conformance-decoder:
   needs:
     - build
 
+# toml-test conformance stage for the encoder direction (closes GAP-0007).
+#
+# Mirrors conformance-decoder but drives the encoder binary via
+# `toml-test -encoder`, which feeds the binary tagged-JSON on stdin
+# and expects TOML on stdout. `allow_failure: true` initially so we
+# establish a baseline without blocking merges; flip to `false` once
+# the pass rate stabilises.
+conformance-encoder:
+  stage: test
+  image: golang:1.22-bookworm
+  before_script:
+    - *install-zig
+    - go install github.com/toml-lang/toml-test/cmd/toml-test@${TOML_TEST_VERSION}
+    - export PATH="$(go env GOPATH)/bin:$PATH"
+    - toml-test -help 2>&1 | head -n 1
+  script:
+    - zig build --release=safe
+    - test -x zig-out/bin/toml-test-encoder
+    - set -o pipefail
+    - toml-test -encoder ./zig-out/bin/toml-test-encoder 2>&1 | tee conformance-encoder.log
+    - |
+      if ! grep -qE "passed,[[:space:]]+[0-9]+[[:space:]]+failed" conformance-encoder.log; then
+        echo "CONFORMANCE GATE: no summary line -- runner aborted early." >&2
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths:
+      - conformance-encoder.log
+    expire_in: 1 month
+  allow_failure: true
+  needs:
+    - build
+
 # Public-API drift gate.
 # Fails the pipeline if the list of `pub const|fn` symbols in
 # src/toml.zig disagrees with docs/PUBLIC_API.md. A rename, removal,
