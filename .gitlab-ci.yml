@@ -39,6 +39,7 @@ stages:
   - build
   - test
   - fuzz
+  - bench
   - security
   - sbom
   - release
@@ -380,6 +381,27 @@ fuzz:
     - if: '$CI_PIPELINE_SOURCE == "web"'
       when: manual
       allow_failure: true
+  allow_failure: true
+  needs:
+    - build
+
+# Microbenchmark harness (GAP-0011).
+# allow_failure: true -- benchmarks publish results only; they do not
+# gate merges yet. A follow-up will add regression thresholds (see
+# docs/PERFORMANCE.md).
+bench:
+  stage: bench
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - zig build bench-all -Doptimize=ReleaseFast 2>bench.stderr | tee bench.csv
+  artifacts:
+    when: always
+    paths:
+      - bench.csv
+      - bench.stderr
+    expire_in: 4 weeks
   allow_failure: true
   needs:
     - build
