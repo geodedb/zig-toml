@@ -253,6 +253,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "parse_deep_nest", .root = "bench/parse_deep_nest.zig" },
         .{ .name = "parse_strings", .root = "bench/parse_strings.zig" },
         .{ .name = "parse_datetime", .root = "bench/parse_datetime.zig" },
+        .{ .name = "parallel_parse", .root = "bench/parallel_parse.zig" },
     };
 
     for (bench_specs) |spec| {

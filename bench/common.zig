@@ -84,11 +84,16 @@ pub const Stats = struct {
 
 /// Allocator wrapper that observes peak outstanding bytes + total bytes
 /// requested across a single benchmark run. Wraps any backing allocator.
+///
+/// All counters are atomic so callers can share one CountingAllocator
+/// across worker threads (parallel_parse relies on this). Peak-update is
+/// a compare-exchange loop so the observed peak is the true maximum of
+/// outstanding bytes seen at any instant, even under contention.
 pub const CountingAllocator = struct {
     backing: std.mem.Allocator,
-    bytes_outstanding: usize = 0,
-    bytes_peak: usize = 0,
-    bytes_total: u64 = 0,
+    bytes_outstanding: std.atomic.Value(usize) = .init(0),
+    bytes_peak: std.atomic.Value(usize) = .init(0),
+    bytes_total: std.atomic.Value(u64) = .init(0),
 
     pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
         return .{ .ptr = self, .vtable = &vtable };
@@ -101,6 +106,30 @@ pub const CountingAllocator = struct {
         .free = free,
     };
 
+    fn bumpPeak(self: *CountingAllocator, new_outstanding: usize) void {
+        var cur = self.bytes_peak.load(.monotonic);
+        while (new_outstanding > cur) {
+            const prev = self.bytes_peak.cmpxchgWeak(
+                cur,
+                new_outstanding,
+                .monotonic,
+                .monotonic,
+            );
+            if (prev == null) return;
+            cur = prev.?;
+        }
+    }
+
+    fn add(self: *CountingAllocator, n: usize) void {
+        const prev = self.bytes_outstanding.fetchAdd(n, .monotonic);
+        _ = self.bytes_total.fetchAdd(n, .monotonic);
+        self.bumpPeak(prev + n);
+    }
+
+    fn sub(self: *CountingAllocator, n: usize) void {
+        _ = self.bytes_outstanding.fetchSub(n, .monotonic);
+    }
+
     fn alloc(
         ctx: *anyopaque,
         len: usize,
@@ -109,12 +138,7 @@ pub const CountingAllocator = struct {
     ) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
         const p = self.backing.rawAlloc(len, alignment, ret);
-        if (p != null) {
-            self.bytes_outstanding += len;
-            self.bytes_total += len;
-            if (self.bytes_outstanding > self.bytes_peak)
-                self.bytes_peak = self.bytes_outstanding;
-        }
+        if (p != null) self.add(len);
         return p;
     }
 
@@ -129,14 +153,10 @@ pub const CountingAllocator = struct {
         const ok = self.backing.rawResize(buf, alignment, new_len, ret);
         if (ok) {
             if (new_len > buf.len) {
-                const diff = new_len - buf.len;
-                self.bytes_outstanding += diff;
-                self.bytes_total += diff;
+                self.add(new_len - buf.len);
             } else {
-                self.bytes_outstanding -= (buf.len - new_len);
+                self.sub(buf.len - new_len);
             }
-            if (self.bytes_outstanding > self.bytes_peak)
-                self.bytes_peak = self.bytes_outstanding;
         }
         return ok;
     }
@@ -152,14 +172,10 @@ pub const CountingAllocator = struct {
         const p = self.backing.rawRemap(buf, alignment, new_len, ret);
         if (p != null) {
             if (new_len > buf.len) {
-                const diff = new_len - buf.len;
-                self.bytes_outstanding += diff;
-                self.bytes_total += diff;
+                self.add(new_len - buf.len);
             } else {
-                self.bytes_outstanding -= (buf.len - new_len);
+                self.sub(buf.len - new_len);
             }
-            if (self.bytes_outstanding > self.bytes_peak)
-                self.bytes_peak = self.bytes_outstanding;
         }
         return p;
     }
@@ -171,7 +187,7 @@ pub const CountingAllocator = struct {
         ret: usize,
     ) void {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.bytes_outstanding -= buf.len;
+        self.sub(buf.len);
         self.backing.rawFree(buf, alignment, ret);
     }
 };
@@ -199,12 +215,12 @@ pub fn runBench(
     var w: u64 = 0;
     while (w < warmup) : (w += 1) {
         try work(a);
-        std.debug.assert(counting.bytes_outstanding == 0);
+        std.debug.assert(counting.bytes_outstanding.load(.monotonic) == 0);
     }
 
     // Reset peak/total after warmup so we measure only timed iterations.
-    counting.bytes_peak = 0;
-    counting.bytes_total = 0;
+    counting.bytes_peak.store(0, .monotonic);
+    counting.bytes_total.store(0, .monotonic);
 
     const samples = try backing.alloc(u64, iters);
     defer backing.free(samples);
@@ -217,7 +233,7 @@ pub fn runBench(
         try work(a);
         const iter_end = monotonicNs();
         samples[i] = iter_end - iter_start;
-        std.debug.assert(counting.bytes_outstanding == 0);
+        std.debug.assert(counting.bytes_outstanding.load(.monotonic) == 0);
     }
 
     const total_ns = monotonicNs() - total_start;
@@ -233,8 +249,8 @@ pub fn runBench(
         .total_ns = total_ns,
         .p50_ns = p50,
         .p99_ns = p99,
-        .bytes_peak = counting.bytes_peak,
-        .bytes_total = counting.bytes_total,
+        .bytes_peak = counting.bytes_peak.load(.monotonic),
+        .bytes_total = counting.bytes_total.load(.monotonic),
     };
 }
 
