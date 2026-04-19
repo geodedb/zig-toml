@@ -23,6 +23,21 @@ pub const DateTimeLocal = value_mod.DateTimeLocal;
 pub const DateLocal = value_mod.DateLocal;
 pub const TimeLocal = value_mod.TimeLocal;
 
+// v1.2.0 API surface (GAP-0022). The typed accessors (asI64/asF64/
+// asBool/asString/asArray/asTable), mutating helpers (tableSetOwned,
+// arrayAppendOwned), and path setters (Document.setPath/setPathSegments)
+// are reachable as methods on the already-exported Value/Document
+// types. These aliases add convenience names at the package root so
+// callers can write `toml.Table` / `toml.tableIterator(...)` without
+// reaching through `toml.value_mod` or the nested `toml.Value.Table`.
+pub const Table = Value.Table;
+pub const Array = Value.Array;
+pub const TableIter = value_mod.TableIter;
+pub const ArrayIter = value_mod.ArrayIter;
+pub const ValueIterator = value_mod.ValueIterator;
+pub const TableIterator = value_mod.TableIterator;
+pub const tableIterator = value_mod.tableIterator;
+
 pub const parser_mod = @import("parser.zig");
 pub const TomlVersion = parser_mod.TomlVersion;
 pub const ParseOptions = parser_mod.ParseOptions;

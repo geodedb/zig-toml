@@ -68,6 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `*Value` and internally copies the payload into the array's
     by-value backing storage.
   - New reference example: `examples/mutation.zig`.
+- Root package-level re-exports for the v1.2.0 mutation/iteration API
+  so callers can write `toml.Table`, `toml.Array`, `toml.TableIter`,
+  `toml.ArrayIter`, `toml.ValueIterator`, `toml.TableIterator`, and
+  `toml.tableIterator(...)` without reaching through `toml.value_mod`
+  or `toml.Value.Table`. The underlying methods (asI64/asF64/asBool/
+  asString/asArray/asTable, tableSetOwned, arrayAppendOwned, setPath,
+  setPathSegments) were already reachable via the exported `Value` /
+  `Document` types; this change just surfaces the remaining container
+  and iterator types at the package root. External consumer-perspective
+  coverage lives in `tests/api_v1_2.zig`. Closes GAP-0022.
 
 ## [0.1.1] - 2026-01-26
 

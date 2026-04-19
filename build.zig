@@ -221,6 +221,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_fuzz_parallel_tests = b.addRunArtifact(fuzz_parallel_tests);
 
+    // GAP-0022: external-consumer-perspective coverage of the v1.2.0
+    // API surface (typed accessors, iterators, setPath, owned mutators).
+    // Catches regressions in the public re-exports in src/toml.zig.
+    const api_v1_2_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/api_v1_2.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "toml", .module = toml_mod }},
+        }),
+    });
+    const run_api_v1_2_tests = b.addRunArtifact(api_v1_2_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
@@ -233,6 +246,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_fuzz_stream_tests.step);
     test_step.dependOn(&run_fuzz_events_tests.step);
     test_step.dependOn(&run_fuzz_parallel_tests.step);
+    test_step.dependOn(&run_api_v1_2_tests.step);
     test_step.dependOn(&run_docs_hygiene.step);
 
     // Benchmark harness (opt-in; not part of `test`).
