@@ -119,7 +119,11 @@ fn writeHeaderChild(
                 try writeTableBody(item, writer, options, path, any_output);
             }
         },
-        else => unreachable,
+        // writeHeaderChild is only dispatched for container variants; a
+        // leaf that slips through is a caller bug, but we turn it into an
+        // observable error rather than @panic so a fuzz mutation or a
+        // future Value variant cannot crash the host process.
+        else => return error.UnsupportedValueVariant,
     }
 }
 
@@ -307,7 +311,10 @@ fn writeLeafValue(v: *const Value, writer: anytype) !void {
         .datetime_local => |dt| try dt.format(writer),
         .date_local => |d| try d.format(writer),
         .time_local => |t| try t.format(writer),
-        .array, .table => unreachable, // routed via writeAnyValue
+        // writeLeafValue is only called for scalar variants; a container
+        // here is a caller bug. Return a real error instead of UB so the
+        // fuzz harness sees it and so a Value-variant drift is observable.
+        .array, .table => return error.UnsupportedValueVariant,
     }
 }
 
@@ -332,6 +339,25 @@ fn writeFloat(f: f64, writer: anytype) !void {
         }
     }
     if (!has_point) try writer.writeAll(".0");
+}
+
+test "writeLeafValue rejects container variants with a typed error" {
+    // S-13 regression: the old else-branch was `unreachable`, which would
+    // panic (or UB in ReleaseFast) if a Value variant ever reached a path
+    // the parser never produces -- e.g. after fuzz mutation or a new
+    // Value variant added upstream. The new contract is a plain error
+    // return that the fuzz harness and any direct caller can see.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tbl = try value_mod.createTable(a);
+    const arr = try value_mod.createArray(a);
+
+    var buf: [16]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try std.testing.expectError(error.UnsupportedValueVariant, writeLeafValue(tbl, &w));
+    try std.testing.expectError(error.UnsupportedValueVariant, writeLeafValue(arr, &w));
 }
 
 test "encode empty document produces empty output" {
