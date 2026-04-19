@@ -1,15 +1,17 @@
 # Gap Analysis
 
 Generated: 2026-04-18 (Phase 4 of audit)
-Last updated: 2026-04-18 (Phase 5 gap closure -- 14 closures landed in 037a918..befaff0)
+Last updated: 2026-04-19 (Phase 4 of post-Q-17 audit: +GAP-0022/0023/0024; GAP-0006/0007/0011/0015/0016/0017/0020 verified closed)
 Platform: GitLab (`gitlab.com/devnw/zig/toml`)
 Source of truth: GitLab issue tracker. This file mirrors the tracker for open gaps.
 
-Catalog: originally 21 open gaps. Post-closure status:
+Catalog: originally 21 open gaps; +3 new (0022/0023/0024) in 2026-04-19 audit. Post-closure status:
 
 - Fully closed: GAP-0002, GAP-0003, GAP-0005, GAP-0006, GAP-0007,
-  GAP-0008, GAP-0010, GAP-0021
-- Still open: 13 items
+  GAP-0008, GAP-0010, GAP-0011, GAP-0015, GAP-0016, GAP-0017,
+  GAP-0020, GAP-0021
+- Still open: 11 items (GAP-0001, 0004, 0009, 0012, 0013, 0014,
+  0018, 0019, 0022, 0023, 0024)
 Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ## Gaps
@@ -212,3 +214,48 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Severity:** Low
 - **Resolution:** `docs/SPEC_COMPLIANCE.md` now carries a per-spec-section matrix mapping each TOML v1.1.0 bullet to implementing symbols (`src/lexer.zig`, `src/parser.zig`) and the tests/fixtures that exercise it.
 - **Resolution evidence:** `docs/SPEC_COMPLIANCE.md`, commit `bdb64c1`.
+
+### GAP-0022: v1.2.0 API code-complete but unexposed (umbrella for #9/#12/#13/#14)
+
+- **Issue:** [#60](https://gitlab.com/devnw/zig/toml/-/issues/60)
+- **Category:** Feature / API
+- **Severity:** High
+- **Requirement source:** REQ-09, REQ-10, REQ-11, REQ-12 (milestone v1.2.0 - Enhanced API). Umbrella over issues [#9](https://gitlab.com/devnw/zig/toml/-/issues/9), [#12](https://gitlab.com/devnw/zig/toml/-/issues/12), [#13](https://gitlab.com/devnw/zig/toml/-/issues/13), [#14](https://gitlab.com/devnw/zig/toml/-/issues/14).
+- **Current state (evidence):**
+  - `src/value.zig:200-268` -- typed conversion helpers implemented: `asI64`, `asF64`, `asBool`, `asString`, `asArray`, `asTable`.
+  - `src/value.zig:269-415` -- zero-allocation iterators implemented: `TableIter`, `ArrayIter`, `ValueIterator`.
+  - `src/value.zig:461-511` -- path-based setters implemented: `Document.setPath`, `Document.setPathSegments`.
+  - `src/value.zig:299-343` -- ownership-clear mutation primitives: `tableSetOwned`, `arrayAppendOwned`.
+  - 58 internal symbol references across `src/`; 0 re-exports in `src/toml.zig`; 0 tests under `tests/` exercising these as public API.
+- **Why this is a gap:** Four v1.2.0 features (REQ-09/10/11/12) are code-complete internally but not reachable from the public entry-point `src/toml.zig`, so they cannot be closed as shipped. Consumers still cannot mutate, iterate, typed-convert, or path-set on a `Document` without private access.
+- **Impact/Risk:** Blocks the v1.2.0 milestone. Work done is invisible to users and to toml-test-compatible external consumers. Risk of silent divergence if internals change before exposure.
+- **Recommended fix:** (1) Re-export helpers/iterators/setters in `src/toml.zig` under a clearly marked v1.2.0 block with ownership docs; (2) add `tests/api_v1_2.zig` covering asI64/asF64/asBool/asString/asArray/asTable, TableIter/ArrayIter/ValueIterator iteration order, setPath/setPathSegments, and ownership invariants of tableSetOwned/arrayAppendOwned; (3) add entries in `docs/API.md` and `docs/PUBLIC_API.md`; (4) CHANGELOG `[Unreleased]` bullets; (5) close issues #9, #12, #13, #14 in the same PR that lands this umbrella.
+- **Acceptance criteria:** Public API symbols reachable via `toml.*`; new acceptance test file green; `docs/API.md` reference entries present; CHANGELOG updated; #9/#12/#13/#14 closed with evidence pointers.
+
+### GAP-0023: SPEC_COMPLIANCE.md + docs/ cite stale `parser.zig::*` symbols after Q-17 extraction
+
+- **Issue:** [#62](https://gitlab.com/devnw/zig/toml/-/issues/62)
+- **Category:** Docs
+- **Severity:** Medium
+- **Requirement source:** Q-17 parser module split (commits `fcec7e7`..`f319529`); doc-hygiene contract that `docs/SPEC_COMPLIANCE.md` symbol citations must resolve against `src/`.
+- **Current state (evidence):**
+  - `rg "parser\.zig::(parseKey|decodeEscape|decodeMultiline|parseInteger|parseFloat|parseDateTimeLocal|parseDateLocal|parseTimeLocal|parseArray|resolveTablePath)" docs/SPEC_COMPLIANCE.md` -- 15 hits.
+  - ~230 total `parser.zig` references under `docs/`, many of which now point to symbols that live in `src/parser/<submodule>.zig` after the Q-17 split (e.g. `parser/table_path.zig`, `parser/inline_table.zig`, `parser/recovery.zig`, `parser/events_sink.zig`).
+- **Why this is a gap:** Spec-compliance matrix claims traceability from TOML v1.1.0 bullets to implementing symbols. Citations like `parser.zig::parseKey` no longer exist at the referenced path, breaking the audit trail that GAP-0021 was closed on.
+- **Impact/Risk:** Reviewers and external consumers cannot trust the compliance matrix; silently invalidates the evidence basis of GAP-0021's resolution.
+- **Recommended fix:** (1) Rewrite all `parser.zig::<symbol>` citations in `docs/SPEC_COMPLIANCE.md` to the new `src/parser/<module>.zig::<symbol>` path; (2) add a CI / pre-commit check (grep-based) that fails when `docs/SPEC_COMPLIANCE.md` references a symbol that does not resolve in `src/`; (3) spot-check 10 random matrix rows to confirm the path+symbol still resolves.
+- **Acceptance criteria:** Zero stale `parser.zig::*` citations in `docs/SPEC_COMPLIANCE.md`; CI guard added and green; audit of 10 random rows all resolve.
+
+### GAP-0024: `zig build test` prints spurious "failed command" line despite exit 0
+
+- **Issue:** [#63](https://gitlab.com/devnw/zig/toml/-/issues/63)
+- **Category:** CI-CD / DX bug
+- **Severity:** Medium
+- **Requirement source:** REQ-18 leak gate + general triage-UX contract that a green test run emits no error-shaped lines.
+- **Current state (evidence):**
+  - `tests/differential.zig:135` and `:141` -- `std.debug.print(...)` writes to stderr during `addRunArtifact --listen` execution.
+  - Exit status is `0`, but the run-artifact driver injects a "failed command" banner on any stderr emission, hiding the true failure line during triage of red runs.
+- **Why this is a gap:** Every green local and CI run prints what looks like a failure banner. Operators learn to ignore it, which masks genuine failures when they happen.
+- **Impact/Risk:** Silent regression risk; violates "green means green" CI contract; obstructs leak-gate triage (REQ-18).
+- **Recommended fix:** (1) Replace the `std.debug.print` calls in `tests/differential.zig` with `std.log.debug` gated by verbosity, or remove entirely; (2) confirm a green `zig build test` emits no "failed command" line; (3) add a CI regex gate that asserts stderr contains no "failed command" on exit 0.
+- **Acceptance criteria:** Green runs produce zero "failed command" banners; regex gate green in CI; no behavior change on red runs.
