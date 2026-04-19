@@ -163,12 +163,7 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ### GAP-0017: SAX / event API
 
-- **Issue:** [#15](https://gitlab.com/devnw/zig/toml/-/issues/15)
-- **Category:** Feature
-- **Severity:** Medium
-- **Requirement source:** REQ-15.
-- **Current state (evidence):** No event callbacks.
-- **Recommended fix:** Event enum + visitor interface.
+- **Status:** Closed -- moved to `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ### GAP-0018: Windows CI
 

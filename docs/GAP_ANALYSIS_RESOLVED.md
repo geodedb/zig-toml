@@ -148,3 +148,47 @@ GitLab issue operations attempted at 2026-04-18 closure time. `glab auth status`
     equivalence, ~1 MiB chunked input, `max_bytes` enforcement).
   - `examples/streaming.zig` -- file + stdin example.
   - `docs/API.md` -- reference entry.
+
+## Plan 10 closure (2026-04-18, feat/sax-event-api)
+
+### GAP-0017: SAX / event API (resolved 2026-04-18)
+
+- **Issue:** [#15](https://gitlab.com/devnw/zig/toml/-/issues/15)
+- **Category:** Feature
+- **Severity:** Medium (was)
+- **Requirement source:** REQ-15.
+- **Resolution:** Shipped `toml.parseEvents(alloc, input, handler, opts)`
+  -- a SAX-style event-driven parser that shares the recursive-descent
+  walker with `toml.parse` via a private `ParseSink` tagged union
+  (`.document` | `.events`). Public types: `Event` (8-variant tagged
+  union) and `EventHandler` (trait-struct with
+  `ctx: *anyopaque` + `handleFn: *const fn(ctx, Event) anyerror!void`).
+  No `Document` is allocated in events mode; the walker dispatches
+  `table_header`, `array_of_tables_header`, `key_value`,
+  `inline_table_start`/`inline_table_end`, `array_start`/`array_end`,
+  and `array_item` events as it traverses the input. Slices inside
+  events live in a throwaway arena that is released before
+  `parseEvents` returns, so handlers must copy anything they need to
+  retain.
+- **Evidence:**
+  - `src/events.zig` -- new leaf module (Event union, EventHandler,
+    tag-count stability test).
+  - `src/parser.zig` -- `ParseSink` union + `sinkEmit*` helpers,
+    `renderKeyPath` helper, wiring inside `parseKeyValue`,
+    `parseArray`, `parseArrayContents`,
+    `parseNestedArrayFromDoubleBracket`, `parseInlineTable`,
+    `parseInlineTableBody`, and `parseTableHeader`.
+  - `src/toml.zig` -- `parseEvents` public wrapper + two unit tests.
+  - `tests/accept.zig` -- five acceptance tests
+    (`parseEvents: table header`,
+    `parseEvents: array of tables`,
+    `parseEvents: inline table brackets correctly`,
+    `parseEvents: scalar array emits array_item per element`,
+    `parseEvents: whole-document event ordering matches document sink`).
+  - `examples/sax_parser.zig` -- new example.
+  - `docs/API.md` -- `parseEvents` reference.
+  - `docs/ARCHITECTURE.md` -- "Event Types (events.zig)" component
+    section + source-tree entry.
+  - `docs/PUBLIC_API.md` -- new `const Event`, `const EventHandler`,
+    `const events`, `fn parseEvents` entries.
+  - `CHANGELOG.md` -- Unreleased `### Added` bullet.
