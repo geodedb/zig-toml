@@ -524,11 +524,9 @@ so the public parser surface is unchanged by the split.
 
 ### Potential Enhancements
 
-1. **Streaming Parser**: For very large files
-2. **Document Modification**: Add/remove/update values
-3. **TOML Writer**: Serialize back to TOML format
-4. **Comptime Parsing**: Parse TOML at compile time
-5. **Schema Validation**: Validate against user-defined schemas
+1. **Document Modification**: Add/remove/update values
+2. **TOML Writer**: Serialize back to TOML format
+3. **Comptime Parsing**: Parse TOML at compile time
 
 ### Known Limitations
 
