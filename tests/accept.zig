@@ -508,3 +508,252 @@ test "S-9 max_values cap returns ResourceLimitExceeded" {
         },
     }
 }
+
+// --------------------------------------------------------------------
+// GAP-0017: SAX-style event API acceptance tests.
+// Lock in per-construct + whole-document event parity so future walker
+// edits cannot silently drift the event stream from the document tree.
+// --------------------------------------------------------------------
+
+test "parseEvents: table header" {
+    const Collector = struct {
+        allocator: std.mem.Allocator,
+        headers: std.ArrayList([]const u8),
+        keys: std.ArrayList([]const u8),
+
+        fn init(a: std.mem.Allocator) @This() {
+            return .{ .allocator = a, .headers = .empty, .keys = .empty };
+        }
+        fn deinit(self: *@This()) void {
+            for (self.headers.items) |h| self.allocator.free(h);
+            for (self.keys.items) |k| self.allocator.free(k);
+            self.headers.deinit(self.allocator);
+            self.keys.deinit(self.allocator);
+        }
+        fn handle(ctx: *anyopaque, ev: toml.Event) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            switch (ev) {
+                .table_header => |h| try self.headers.append(self.allocator, try self.allocator.dupe(u8, h)),
+                .key_value => |kv| try self.keys.append(self.allocator, try self.allocator.dupe(u8, kv.key)),
+                else => {},
+            }
+        }
+    };
+
+    var c = Collector.init(std.testing.allocator);
+    defer c.deinit();
+    try toml.parseEvents(
+        std.testing.allocator,
+        "[section]\nkey = \"value\"\n",
+        .{ .ctx = &c, .handleFn = Collector.handle },
+        .{},
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), c.headers.items.len);
+    try std.testing.expectEqualStrings("section", c.headers.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), c.keys.items.len);
+    try std.testing.expectEqualStrings("key", c.keys.items[0]);
+}
+
+test "parseEvents: array of tables" {
+    const Collector = struct {
+        allocator: std.mem.Allocator,
+        aot_headers: std.ArrayList([]const u8),
+
+        fn init(a: std.mem.Allocator) @This() {
+            return .{ .allocator = a, .aot_headers = .empty };
+        }
+        fn deinit(self: *@This()) void {
+            for (self.aot_headers.items) |h| self.allocator.free(h);
+            self.aot_headers.deinit(self.allocator);
+        }
+        fn handle(ctx: *anyopaque, ev: toml.Event) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            switch (ev) {
+                .array_of_tables_header => |h| try self.aot_headers.append(self.allocator, try self.allocator.dupe(u8, h)),
+                else => {},
+            }
+        }
+    };
+
+    var c = Collector.init(std.testing.allocator);
+    defer c.deinit();
+    const input =
+        \\[[items]]
+        \\name = "x"
+        \\
+        \\[[items]]
+        \\name = "y"
+    ;
+    try toml.parseEvents(
+        std.testing.allocator,
+        input,
+        .{ .ctx = &c, .handleFn = Collector.handle },
+        .{},
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), c.aot_headers.items.len);
+    try std.testing.expectEqualStrings("items", c.aot_headers.items[0]);
+    try std.testing.expectEqualStrings("items", c.aot_headers.items[1]);
+}
+
+test "parseEvents: inline table brackets correctly" {
+    const Tracker = struct {
+        depth: i32 = 0,
+        max_depth: i32 = 0,
+        starts: usize = 0,
+        ends: usize = 0,
+
+        fn handle(ctx: *anyopaque, ev: toml.Event) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            switch (ev) {
+                .inline_table_start => {
+                    self.starts += 1;
+                    self.depth += 1;
+                    if (self.depth > self.max_depth) self.max_depth = self.depth;
+                },
+                .inline_table_end => {
+                    self.ends += 1;
+                    self.depth -= 1;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var t: Tracker = .{};
+    try toml.parseEvents(
+        std.testing.allocator,
+        "point = { x = 1, y = 2 }\n",
+        .{ .ctx = &t, .handleFn = Tracker.handle },
+        .{},
+    );
+    try std.testing.expectEqual(@as(usize, 1), t.starts);
+    try std.testing.expectEqual(@as(usize, 1), t.ends);
+    try std.testing.expectEqual(@as(i32, 0), t.depth);
+    try std.testing.expectEqual(@as(i32, 1), t.max_depth);
+}
+
+test "parseEvents: scalar array emits array_item per element" {
+    const Tracker = struct {
+        starts: usize = 0,
+        ends: usize = 0,
+        items: std.ArrayList(i64),
+
+        fn init() @This() {
+            return .{ .items = .empty };
+        }
+        fn deinit(self: *@This(), a: std.mem.Allocator) void {
+            self.items.deinit(a);
+        }
+        fn handle(ctx: *anyopaque, ev: toml.Event) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            switch (ev) {
+                .array_start => self.starts += 1,
+                .array_end => self.ends += 1,
+                .array_item => |v| switch (v) {
+                    .integer => |n| try self.items.append(std.testing.allocator, n),
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    };
+
+    var t = Tracker.init();
+    defer t.deinit(std.testing.allocator);
+    try toml.parseEvents(
+        std.testing.allocator,
+        "arr = [1, 2, 3]\n",
+        .{ .ctx = &t, .handleFn = Tracker.handle },
+        .{},
+    );
+    try std.testing.expectEqual(@as(usize, 1), t.starts);
+    try std.testing.expectEqual(@as(usize, 1), t.ends);
+    try std.testing.expectEqual(@as(usize, 3), t.items.items.len);
+    try std.testing.expectEqual(@as(i64, 1), t.items.items[0]);
+    try std.testing.expectEqual(@as(i64, 2), t.items.items[1]);
+    try std.testing.expectEqual(@as(i64, 3), t.items.items[2]);
+}
+
+test "parseEvents: whole-document event ordering matches document sink" {
+    const Recorder = struct {
+        allocator: std.mem.Allocator,
+        log: std.ArrayList([]const u8),
+
+        fn init(a: std.mem.Allocator) @This() {
+            return .{ .allocator = a, .log = .empty };
+        }
+        fn deinit(self: *@This()) void {
+            for (self.log.items) |s| self.allocator.free(s);
+            self.log.deinit(self.allocator);
+        }
+        fn push(self: *@This(), s: []const u8) !void {
+            try self.log.append(self.allocator, try self.allocator.dupe(u8, s));
+        }
+        fn handle(ctx: *anyopaque, ev: toml.Event) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            switch (ev) {
+                .table_header => |h| {
+                    var buf: [128]u8 = undefined;
+                    const s = try std.fmt.bufPrint(&buf, "[{s}]", .{h});
+                    try self.push(s);
+                },
+                .array_of_tables_header => |h| {
+                    var buf: [128]u8 = undefined;
+                    const s = try std.fmt.bufPrint(&buf, "[[{s}]]", .{h});
+                    try self.push(s);
+                },
+                .key_value => |kv| {
+                    var buf: [128]u8 = undefined;
+                    const s = try std.fmt.bufPrint(&buf, "kv:{s}", .{kv.key});
+                    try self.push(s);
+                },
+                .inline_table_start => try self.push("{"),
+                .inline_table_end => try self.push("}"),
+                .array_start => try self.push("["),
+                .array_end => try self.push("]"),
+                .array_item => try self.push("item"),
+            }
+        }
+    };
+
+    const input =
+        \\title = "z"
+        \\[srv]
+        \\host = "h"
+        \\ports = [80, 443]
+        \\[[users]]
+        \\name = "alice"
+        \\[[users]]
+        \\name = "bob"
+    ;
+
+    var rec = Recorder.init(std.testing.allocator);
+    defer rec.deinit();
+    try toml.parseEvents(
+        std.testing.allocator,
+        input,
+        .{ .ctx = &rec, .handleFn = Recorder.handle },
+        .{},
+    );
+
+    const expected = [_][]const u8{
+        "kv:title",
+        "[srv]",
+        "kv:host",
+        "kv:ports",
+        "[",
+        "item",
+        "item",
+        "]",
+        "[[users]]",
+        "kv:name",
+        "[[users]]",
+        "kv:name",
+    };
+    try std.testing.expectEqual(expected.len, rec.log.items.len);
+    for (expected, 0..) |want, i| {
+        try std.testing.expectEqualStrings(want, rec.log.items[i]);
+    }
+}
