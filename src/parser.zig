@@ -19,6 +19,7 @@ const number = @import("parser/number.zig");
 const string = @import("parser/string.zig");
 const recovery = @import("parser/recovery.zig");
 const events_sink = @import("parser/events_sink.zig");
+const inline_table = @import("parser/inline_table.zig");
 const Value = val.Value;
 const Document = val.Document;
 const TableEntry = val.TableEntry;
@@ -113,7 +114,7 @@ pub const Parser = struct {
         };
     }
 
-    fn bumpKeys(self: *Parser) !void {
+    pub fn bumpKeys(self: *Parser) !void {
         self.keys_allocated += 1;
         if (self.keys_allocated > self.options.max_keys) {
             self.parse_error = err.makeError(
@@ -125,7 +126,7 @@ pub const Parser = struct {
         }
     }
 
-    fn bumpValues(self: *Parser) !void {
+    pub fn bumpValues(self: *Parser) !void {
         self.values_allocated += 1;
         if (self.values_allocated > self.options.max_values) {
             self.parse_error = err.makeError(
@@ -462,7 +463,7 @@ pub const Parser = struct {
         try self.skipToNewline();
     }
 
-    fn parseKeyPath(self: *Parser, alloc: Allocator, path: *std.ArrayList([]const u8)) !void {
+    pub fn parseKeyPath(self: *Parser, alloc: Allocator, path: *std.ArrayList([]const u8)) !void {
         while (true) {
             // Handle float tokens like "1.2" as dotted keys "1"."2"
             if (self.current.tag == .float) {
@@ -529,7 +530,7 @@ pub const Parser = struct {
     /// the parser runs in events mode (GAP-0017). For the document sink
     /// the set still collapses back to `error{ParseFailed, OutOfMemory}`
     /// because the sink helpers do nothing in document mode.
-    const ParseValueError = anyerror;
+    pub const ParseValueError = anyerror;
 
     /// Increment the recursion depth counter and bail if the configured
     /// max_depth is exceeded. Every recursive descent entrypoint
@@ -537,7 +538,7 @@ pub const Parser = struct {
     /// parseNestedArrayFromDoubleBracket) MUST call this with a matching
     /// `exitDepth()` in a defer to guarantee resource-exhaustion guards
     /// cannot be bypassed by any alternate call path.
-    fn enterDepth(self: *Parser) !void {
+    pub fn enterDepth(self: *Parser) !void {
         self.depth += 1;
         if (self.depth > self.options.max_depth) {
             self.parse_error = err.makeError(.LimitExceeded, self.current.pos, "max nesting depth exceeded");
@@ -545,11 +546,11 @@ pub const Parser = struct {
         }
     }
 
-    fn exitDepth(self: *Parser) void {
+    pub fn exitDepth(self: *Parser) void {
         self.depth -= 1;
     }
 
-    fn parseValue(self: *Parser, alloc: Allocator) ParseValueError!*Value {
+    pub fn parseValue(self: *Parser, alloc: Allocator) ParseValueError!*Value {
         try self.enterDepth();
         defer self.exitDepth();
 
@@ -836,235 +837,8 @@ pub const Parser = struct {
         return Value{ .array = .{ .items = items, .is_static = true } };
     }
 
-    /// Scratch state carried from `parseInlineTableHeader` through
-    /// `parseInlineTableBody` into `validateInlineTableV10Restrictions`.
-    const InlineTableHeader = struct {
-        /// Position of the opening `{` — used for trailing-comma errors.
-        open_pos: Position,
-        /// The entry map under construction. The caller-owned `map` is
-        /// wrapped into a `Value.table` by `parseInlineTable` once the
-        /// body completes.
-        map: std.StringArrayHashMapUnmanaged(*Value),
-    };
-
     fn parseInlineTable(self: *Parser, alloc: Allocator) ParseValueError!Value {
-        // Defense-in-depth: inline tables are a recursive construct too.
-        try self.enterDepth();
-        defer self.exitDepth();
-
-        var header = try self.parseInlineTableHeader(alloc);
-        errdefer header.map.deinit(alloc);
-
-        // Event-mode: announce the inline table after the `{` has been
-        // consumed (inside parseInlineTableHeader) and before the body
-        // keys are parsed so the handler sees `{`, kv:..., kv:..., `}`.
-        try events_sink.emitSimple(self, .inline_table_start);
-
-        // Capture the first offending token position for v1.0 restriction
-        // diagnostics so error carets point at the violating `,` / newline
-        // rather than at the opening `{` of the inline table.
-        var trailing_comma_pos: ?Position = null;
-        var newline_inside_pos: ?Position = null;
-        try self.parseInlineTableBody(alloc, &header, &trailing_comma_pos, &newline_inside_pos);
-        try self.validateInlineTableV10Restrictions(&header, trailing_comma_pos, newline_inside_pos);
-
-        try events_sink.emitSimple(self, .inline_table_end);
-
-        return Value{ .table = .{ .map = header.map, .is_inline = true, .is_closed_inline = true } };
-    }
-
-    fn parseInlineTableHeader(self: *Parser, alloc: Allocator) ParseValueError!InlineTableHeader {
-        const open_pos = self.current.pos;
-        self.current = try self.nextToken(); // consume {
-
-        // Typical inline tables have a handful of entries; 16 avoids the
-        // initial reallocation ladder for essentially every real-world case.
-        var map: std.StringArrayHashMapUnmanaged(*Value) = .{};
-        errdefer map.deinit(alloc);
-        try map.ensureTotalCapacity(alloc, 16);
-
-        return .{ .open_pos = open_pos, .map = map };
-    }
-
-    fn parseInlineTableBody(
-        self: *Parser,
-        alloc: Allocator,
-        header: *InlineTableHeader,
-        trailing_comma_pos: *?Position,
-        newline_inside_pos: *?Position,
-    ) ParseValueError!void {
-        while (self.current.tag != .right_brace and self.current.tag != .eof) {
-            // Track newlines inside the body; v1.0 validation happens later.
-            if (self.current.tag == .newline) {
-                if (newline_inside_pos.* == null) newline_inside_pos.* = self.current.pos;
-                self.current = try self.nextToken();
-                continue;
-            }
-
-            if (self.current.tag == .comment) {
-                self.current = try self.nextToken();
-                continue;
-            }
-
-            // Parse key = value
-            var path: std.ArrayList([]const u8) = try .initCapacity(alloc, 8);
-            try self.parseKeyPath(alloc, &path);
-
-            if (self.current.tag != .equals) {
-                self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected '='");
-                return error.ParseFailed;
-            }
-            self.current = try self.nextToken();
-
-            // Events mode: pre-announce container key_values so handlers
-            // see `kv:key -> container_start`. Scalar key_values fire
-            // after the value is decoded, below.
-            const body_value_is_container = switch (self.current.tag) {
-                .left_bracket, .double_bracket_open, .left_brace => true,
-                else => false,
-            };
-            if (self.sink == .events and body_value_is_container) {
-                try events_sink.emitKeyValueContainer(self, path.items[path.items.len - 1]);
-            }
-
-            const value = try self.parseValue(alloc);
-
-            if (self.sink == .events and !body_value_is_container) {
-                try events_sink.emitKeyValueScalar(self, path.items[path.items.len - 1], value.*);
-            }
-
-            // Handle dotted keys in inline table
-            if (path.items.len > 1) {
-                // Create nested tables starting from the second key
-                // For "a.b = 1", path is ["a", "b"], we want a -> {b -> 1}
-                try self.bumpValues();
-                var current_table = try val.createTable(alloc);
-                current_table.table.is_inline = true;
-                var target = current_table;
-
-                // Start from index 1, not 0 - the first key becomes the root key
-                for (path.items[1 .. path.items.len - 1]) |key| {
-                    try self.bumpValues();
-                    const nested = try val.createTable(alloc);
-                    nested.table.is_inline = true;
-                    try val.tableSet(alloc, target, key, nested);
-                    target = nested;
-                }
-
-                try val.tableSet(alloc, target, path.items[path.items.len - 1], value);
-
-                // Merge or add the root key. O(1) probe.
-                const root_key = path.items[0];
-                if (header.map.get(root_key)) |existing_value| {
-                    // Cannot extend an inline table that was defined with { ... } syntax
-                    if (existing_value.* == .table and existing_value.table.is_closed_inline) {
-                        self.parse_error = err.makeError(.TableRedefined, self.current.pos, "cannot extend inline table with dotted key");
-                        return error.ParseFailed;
-                    }
-                    // Merge tables - fails if either side is not a table
-                    mergeTables(alloc, existing_value, current_table) catch {
-                        self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "cannot overwrite key with dotted key");
-                        return error.ParseFailed;
-                    };
-                } else {
-                    // root_key is arena-owned (P-5); no dupe.
-                    try header.map.put(alloc, root_key, current_table);
-                }
-            } else {
-                // Check for duplicate key. O(1).
-                if (header.map.contains(path.items[0])) {
-                    self.parse_error = err.makeError(.DuplicateKey, self.current.pos, "duplicate key in inline table");
-                    return error.ParseFailed;
-                }
-                try header.map.put(alloc, path.items[0], value);
-            }
-
-            // Skip whitespace/newlines (tracking, not rejecting).
-            while (self.current.tag == .newline or self.current.tag == .comment) {
-                if (self.current.tag == .newline and newline_inside_pos.* == null) {
-                    newline_inside_pos.* = self.current.pos;
-                }
-                self.current = try self.nextToken();
-            }
-
-            if (self.current.tag == .comma) {
-                // Capture comma position before consuming in case this
-                // turns out to be a trailing comma.
-                const comma_pos = self.current.pos;
-                self.current = try self.nextToken();
-
-                // Skip whitespace/newlines after comma.
-                while (self.current.tag == .newline or self.current.tag == .comment) {
-                    if (self.current.tag == .newline and newline_inside_pos.* == null) {
-                        newline_inside_pos.* = self.current.pos;
-                    }
-                    self.current = try self.nextToken();
-                }
-
-                // Trailing comma: flag for post-body validation.
-                if (self.current.tag == .right_brace and trailing_comma_pos.* == null) {
-                    trailing_comma_pos.* = comma_pos;
-                }
-            } else if (self.current.tag != .right_brace) {
-                // No comma and not closing brace - error
-                self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected ',' or '}' in inline table");
-                return error.ParseFailed;
-            }
-        }
-
-        if (self.current.tag != .right_brace) {
-            self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected '}'");
-            return error.ParseFailed;
-        }
-        self.current = try self.nextToken();
-    }
-
-    fn validateInlineTableV10Restrictions(
-        self: *Parser,
-        header: *const InlineTableHeader,
-        trailing_comma_pos: ?Position,
-        newline_inside_pos: ?Position,
-    ) ParseValueError!void {
-        _ = header; // preserved in signature; may be reused for future diagnostics.
-        if (self.options.version != .v1_0_0) return;
-        if (trailing_comma_pos) |pos| {
-            self.parse_error = err.makeError(
-                .InlineTableTrailingCommaNotAllowed,
-                pos,
-                "trailing comma not allowed in inline tables in TOML v1.0",
-            );
-            return error.ParseFailed;
-        }
-        if (newline_inside_pos) |pos| {
-            self.parse_error = err.makeError(
-                .InlineTableNewlineNotAllowed,
-                pos,
-                "newlines not allowed in inline tables in TOML v1.0",
-            );
-            return error.ParseFailed;
-        }
-    }
-
-    fn mergeTables(alloc: Allocator, target: *Value, source: *Value) error{ ParseFailed, OutOfMemory }!void {
-        // Both must be tables
-        if (target.* != .table or source.* != .table) {
-            return error.ParseFailed;
-        }
-
-        // Iterate source in insertion order; O(n) with O(1) per probe
-        // into target instead of the old O(n*m) nested linear scan.
-        var it = val.tableIterator(source);
-        while (it.next()) |src_entry| {
-            if (target.table.map.get(src_entry.key)) |tgt_value| {
-                // Both values must be tables to merge.
-                if (tgt_value.* != .table or src_entry.value.* != .table) {
-                    return error.ParseFailed;
-                }
-                try mergeTables(alloc, tgt_value, src_entry.value);
-            } else {
-                try val.tableSet(alloc, target, src_entry.key, src_entry.value);
-            }
-        }
+        return inline_table.parseInlineTable(self, alloc);
     }
 
     fn skipArrayWhitespace(self: *Parser) !void {
