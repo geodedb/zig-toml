@@ -113,6 +113,79 @@ switch (result) {
 
 ---
 
+### parseStream
+
+```zig
+pub fn parseStream(
+    alloc: Allocator,
+    reader: *std.Io.Reader,
+    opts: ParseOptions,
+) !*Document
+```
+
+**Description:** Parse a TOML document from any `std.Io.Reader` (file,
+socket, pipe, test fixture). Internally the reader is drained into a
+single `opts.max_bytes`-bounded buffer owned by `alloc`, then delegated
+to `parse`. Ownership of the returned `*Document` and its memory arena
+is identical to `parse` -- call `deinit()` to free it.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| alloc | Allocator | Memory allocator. Used both for the transient drain buffer (freed before return) and for the returned Document's arena. |
+| reader | `*std.Io.Reader` | Streaming reader. The reader is drained to EOF. |
+| opts | ParseOptions | Same options as `parse`. `opts.max_bytes` acts as an upper bound on both the drain and the subsequent parse. |
+
+**Returns:** `*Document` -- see `parse`.
+
+**Errors:**
+
+| Error | Description |
+|-------|-------------|
+| `error.ParseFailed` | TOML parse error (use `parseWithError` on a pre-read slice when you need details). |
+| `error.StreamTooLong` | Reader produced more than `opts.max_bytes` bytes before EOF. |
+| `error.OutOfMemory` | Allocation failed. |
+| (any reader error) | Propagated unchanged from the underlying `std.Io.Reader`. |
+
+**Example -- parse a TOML file:**
+
+```zig
+const std = @import("std");
+const toml = @import("toml");
+
+pub fn main(init: std.process.Init) !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var file = try std.fs.cwd().openFile("config.toml", .{});
+    defer file.close();
+
+    var buf: [4096]u8 = undefined;
+    var file_reader = file.readerStreaming(init.io, &buf);
+
+    const doc = try toml.parseStream(allocator, &file_reader.interface, .{});
+    defer doc.deinit();
+
+    if (doc.root.get("title")) |t| {
+        std.debug.print("title = {s}\n", .{t.string});
+    }
+}
+```
+
+**Notes:**
+
+- Design A ("buffer-then-parse"): this entry point still materialises
+  the full document in memory. It removes the boilerplate of driving
+  the reader yourself but does **not** enable parsing documents
+  larger than `opts.max_bytes`. Truly incremental lexing is tracked
+  under v2.0.0 (see `docs/ROADMAP.md`).
+- Thread safety matches `parse`: the returned `Document` is safe to
+  share across threads only under the same rules as `parse` output.
+
+---
+
 ### writeTaggedJson
 
 ```zig
