@@ -369,172 +369,149 @@ pub const Lexer = struct {
         return error.ParseFailed;
     }
 
+    /// Flags accumulated while scanning a numeric or datetime literal;
+    /// together they pick the final TokenTag in classifyNumericToken.
+    const NumericScan = struct {
+        digit_count: usize = 0,
+        has_dash: bool = false,
+        has_colon: bool = false,
+        has_dot: bool = false,
+        has_underscore: bool = false,
+        has_exp: bool = false,
+        has_base_prefix: bool = false,
+        has_datetime_sep: bool = false,
+    };
+
     fn lexNumberOrDateTime(self: *Lexer) !Token {
         const start = self.pos.byte_index;
         const start_pos = self.pos;
 
         // Consume sign if present
         const has_sign = self.peek() == '+' or self.peek() == '-';
-        if (has_sign) {
-            self.advance();
-        }
+        if (has_sign) self.advance();
 
-        // Check for special float values: inf, nan
+        // Special float values (inf, nan, +inf, -nan) are bare words, not numbers.
         if (self.peek() == 'i' or self.peek() == 'n') {
-            // Consume the keyword
-            while (self.pos.byte_index < self.input.len and isBareKeyChar(self.peek())) {
-                self.advance();
-            }
-            return Token{
-                .tag = .float,
-                .start = start,
-                .end = self.pos.byte_index,
-                .pos = start_pos,
-            };
+            return self.finishBareKeyRun(start, start_pos, .float);
         }
 
-        // If sign is followed by a non-digit letter, this is a bare key like "-key"
+        // A signed identifier like "-key" also lands here; emit it as a
+        // bare key rather than a malformed number.
         if (has_sign and !isDigit(self.peek()) and isBareKeyChar(self.peek())) {
-            while (self.pos.byte_index < self.input.len and isBareKeyChar(self.peek())) {
-                self.advance();
-            }
-            return Token{
-                .tag = .bare_key,
-                .start = start,
-                .end = self.pos.byte_index,
-                .pos = start_pos,
-            };
+            return self.finishBareKeyRun(start, start_pos, .bare_key);
         }
 
-        // Count digits and look for date/time patterns
-        var digit_count: usize = 0;
-        var has_dash = false;
-        var has_colon = false;
-        var has_dot = false;
-        var has_underscore = false;
-        var has_exp = false;
-        var has_base_prefix = false;
-        var has_datetime_sep = false;
+        var scan = NumericScan{};
 
-        // Check for 0x, 0o, 0b prefix
+        // 0x / 0o / 0b prefixes switch the digit alphabet.
         if (self.peek() == '0') {
             const next_char = self.lookAhead(1);
             if (next_char == 'x' or next_char == 'o' or next_char == 'b') {
-                has_base_prefix = true;
+                scan.has_base_prefix = true;
                 self.advance(); // 0
                 self.advance(); // x/o/b
             }
         }
 
-        // Scan the number/datetime
-        while (self.pos.byte_index < self.input.len) {
-            const c = self.peek();
-            if (isDigit(c) or (has_base_prefix and isHexDigit(c))) {
-                digit_count += 1;
-                self.advance();
-            } else if (c == '_') {
-                has_underscore = true;
-                self.advance();
-            } else if (c == '-') {
-                // Only consume dash if followed by a digit (date pattern like YYYY-MM-DD)
-                const next_ch = self.lookAhead(1);
-                if (isDigit(next_ch)) {
-                    has_dash = true;
-                    self.advance();
-                } else if (isBareKeyChar(next_ch)) {
-                    // Dash followed by letter - this is a bare key like "2000-datetime"
-                    // Consume rest as bare key
-                    self.advance(); // consume -
-                    while (self.pos.byte_index < self.input.len and isBareKeyChar(self.peek())) {
-                        self.advance();
-                    }
-                    return Token{
-                        .tag = .bare_key,
-                        .start = start,
-                        .end = self.pos.byte_index,
-                        .pos = start_pos,
-                    };
-                } else {
-                    break; // Dash not followed by valid char
-                }
-            } else if (c == ':') {
-                has_colon = true;
-                self.advance();
-            } else if (c == '.') {
-                has_dot = true;
-                self.advance();
-            } else if (c == 'e' or c == 'E') {
-                has_exp = true;
-                self.advance();
-                if (self.peek() == '+' or self.peek() == '-') {
-                    self.advance();
-                }
-            } else if (c == '+') {
-                // Could be timezone offset
-                self.advance();
-            } else if (c == 'T' or c == 't' or c == ' ') {
-                // Date-time separator - only valid after YYYY-MM-DD (at least 8 digits)
-                // Only consume if followed by a digit (start of time)
-                if (has_dash and digit_count >= 8) {
-                    const next_ch = self.lookAhead(1);
-                    if (isDigit(next_ch)) {
-                        has_datetime_sep = true;
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            } else if (c == 'Z' or c == 'z') {
-                self.advance();
-                break;
-            } else {
-                break;
-            }
-        }
+        if (try self.scanNumericBody(&scan, start, start_pos)) |tok| return tok;
 
-        // Check if there are more bare key chars (letters) following
-        // If so, this is a bare key like "1key", not a number
-        if (self.pos.byte_index < self.input.len and !has_base_prefix) {
+        // A trailing letter means this was really a bare key like "1k".
+        // Hex/octal/binary literals whitelist letters, so only kick in
+        // here when we didn't take a base prefix.
+        if (self.pos.byte_index < self.input.len and !scan.has_base_prefix) {
             const c = self.peek();
             if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')) {
-                // Consume rest as bare key
-                while (self.pos.byte_index < self.input.len and isBareKeyChar(self.peek())) {
-                    self.advance();
-                }
-                return Token{
-                    .tag = .bare_key,
-                    .start = start,
-                    .end = self.pos.byte_index,
-                    .pos = start_pos,
-                };
+                return self.finishBareKeyRun(start, start_pos, .bare_key);
             }
         }
 
-        const text = self.input[start..self.pos.byte_index];
+        return Token{
+            .tag = classifyNumericToken(self.input[start..self.pos.byte_index], scan),
+            .start = start,
+            .end = self.pos.byte_index,
+            .pos = start_pos,
+        };
+    }
 
-        // Determine token type based on content
-        // If we consumed a datetime separator (T) but no time (colon), it's invalid
-        const tag: TokenTag = if (has_datetime_sep and !has_colon)
-            .invalid // Date with T but no time part
-        else if (has_dash and has_colon)
-            if (containsTimezone(text)) .datetime else .datetime_local
-        else if (has_dash and !has_colon and !has_exp)
-            .date_local
-        else if (has_colon and !has_dash)
-            .time_local
-        else if (has_dot or has_exp)
-            .float
-        else
-            .integer;
-
+    /// Consume the rest of a bare-key run (`isBareKeyChar`) and return a
+    /// Token spanning `[start..current]` tagged as `tag`.
+    fn finishBareKeyRun(self: *Lexer, start: usize, start_pos: Position, tag: TokenTag) Token {
+        while (self.pos.byte_index < self.input.len and isBareKeyChar(self.peek())) {
+            self.advance();
+        }
         return Token{
             .tag = tag,
             .start = start,
             .end = self.pos.byte_index,
             .pos = start_pos,
         };
+    }
+
+    /// Drive the numeric/datetime scan loop. Populates `scan` and returns
+    /// a bare-key Token early when the digit run turns out to be
+    /// `NNNN-<letter>...` (e.g. `2000-word`). Otherwise returns null and
+    /// leaves the caller to classify the final token.
+    fn scanNumericBody(
+        self: *Lexer,
+        scan: *NumericScan,
+        start: usize,
+        start_pos: Position,
+    ) !?Token {
+        while (self.pos.byte_index < self.input.len) {
+            const c = self.peek();
+            if (isDigit(c) or (scan.has_base_prefix and isHexDigit(c))) {
+                scan.digit_count += 1;
+                self.advance();
+            } else if (c == '_') {
+                scan.has_underscore = true;
+                self.advance();
+            } else if (c == '-') {
+                const next_ch = self.lookAhead(1);
+                if (isDigit(next_ch)) {
+                    scan.has_dash = true;
+                    self.advance();
+                } else if (isBareKeyChar(next_ch)) {
+                    // `2000-word` -- bare key, not an RFC3339 date.
+                    self.advance(); // consume -
+                    return self.finishBareKeyRun(start, start_pos, .bare_key);
+                } else break;
+            } else if (c == ':') {
+                scan.has_colon = true;
+                self.advance();
+            } else if (c == '.') {
+                scan.has_dot = true;
+                self.advance();
+            } else if (c == 'e' or c == 'E') {
+                scan.has_exp = true;
+                self.advance();
+                if (self.peek() == '+' or self.peek() == '-') self.advance();
+            } else if (c == '+') {
+                // Likely a timezone offset; the parser validates.
+                self.advance();
+            } else if (c == 'T' or c == 't' or c == ' ') {
+                // Date-time separator only valid after `YYYY-MM-DD` and
+                // must be followed by a digit (start of time).
+                if (scan.has_dash and scan.digit_count >= 8 and isDigit(self.lookAhead(1))) {
+                    scan.has_datetime_sep = true;
+                    self.advance();
+                } else break;
+            } else if (c == 'Z' or c == 'z') {
+                self.advance();
+                break;
+            } else break;
+        }
+        return null;
+    }
+
+    /// Decide the final TokenTag for a numeric/datetime run from the
+    /// flags collected in `scanNumericBody`. Pure function over `scan`.
+    fn classifyNumericToken(text: []const u8, scan: NumericScan) TokenTag {
+        if (scan.has_datetime_sep and !scan.has_colon) return .invalid;
+        if (scan.has_dash and scan.has_colon) return if (containsTimezone(text)) .datetime else .datetime_local;
+        if (scan.has_dash and !scan.has_colon and !scan.has_exp) return .date_local;
+        if (scan.has_colon and !scan.has_dash) return .time_local;
+        if (scan.has_dot or scan.has_exp) return .float;
+        return .integer;
     }
 
     fn lexBareKeyOrBool(self: *Lexer) !Token {
