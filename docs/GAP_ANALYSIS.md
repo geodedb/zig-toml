@@ -1,7 +1,7 @@
 # Gap Analysis
 
 Generated: 2026-04-18 (Phase 4 of audit)
-Last updated: 2026-04-19 (Phase 4 of post-Q-17 audit: +GAP-0022/0023/0024; GAP-0006/0007/0011/0015/0016/0017/0020 verified closed)
+Last updated: 2026-04-19 (Phase 7 closure batch: GAP-0023 closed -- commit `e670231`)
 Platform: GitLab (`gitlab.com/devnw/zig/toml`)
 Source of truth: GitLab issue tracker. This file mirrors the tracker for open gaps.
 
@@ -9,9 +9,9 @@ Catalog: originally 21 open gaps; +3 new (0022/0023/0024) in 2026-04-19 audit. P
 
 - Fully closed: GAP-0002, GAP-0003, GAP-0005, GAP-0006, GAP-0007,
   GAP-0008, GAP-0010, GAP-0011, GAP-0015, GAP-0016, GAP-0017,
-  GAP-0020, GAP-0021
-- Still open: 11 items (GAP-0001, 0004, 0009, 0012, 0013, 0014,
-  0018, 0019, 0022, 0023, 0024)
+  GAP-0020, GAP-0021, GAP-0023
+- Still open: 10 items (GAP-0001, 0004, 0009, 0012, 0013, 0014,
+  0018, 0019, 0022, 0024)
 Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ## Gaps
@@ -234,17 +234,13 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ### GAP-0023: SPEC_COMPLIANCE.md + docs/ cite stale `parser.zig::*` symbols after Q-17 extraction
 
+- **Status:** Closed -- commit `e670231` (2026-04-19). Moved to `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Issue:** [#62](https://gitlab.com/devnw/zig/toml/-/issues/62)
 - **Category:** Docs
 - **Severity:** Medium
-- **Requirement source:** Q-17 parser module split (commits `fcec7e7`..`f319529`); doc-hygiene contract that `docs/SPEC_COMPLIANCE.md` symbol citations must resolve against `src/`.
-- **Current state (evidence):**
-  - `rg "parser\.zig::(parseKey|decodeEscape|decodeMultiline|parseInteger|parseFloat|parseDateTimeLocal|parseDateLocal|parseTimeLocal|parseArray|resolveTablePath)" docs/SPEC_COMPLIANCE.md` -- 15 hits.
-  - ~230 total `parser.zig` references under `docs/`, many of which now point to symbols that live in `src/parser/<submodule>.zig` after the Q-17 split (e.g. `parser/table_path.zig`, `parser/inline_table.zig`, `parser/recovery.zig`, `parser/events_sink.zig`).
-- **Why this is a gap:** Spec-compliance matrix claims traceability from TOML v1.1.0 bullets to implementing symbols. Citations like `parser.zig::parseKey` no longer exist at the referenced path, breaking the audit trail that GAP-0021 was closed on.
-- **Impact/Risk:** Reviewers and external consumers cannot trust the compliance matrix; silently invalidates the evidence basis of GAP-0021's resolution.
-- **Recommended fix:** (1) Rewrite all `parser.zig::<symbol>` citations in `docs/SPEC_COMPLIANCE.md` to the new `src/parser/<module>.zig::<symbol>` path; (2) add a CI / pre-commit check (grep-based) that fails when `docs/SPEC_COMPLIANCE.md` references a symbol that does not resolve in `src/`; (3) spot-check 10 random matrix rows to confirm the path+symbol still resolves.
-- **Acceptance criteria:** Zero stale `parser.zig::*` citations in `docs/SPEC_COMPLIANCE.md`; CI guard added and green; audit of 10 random rows all resolve.
+- **Resolution:** All 11 stale `parser.zig::*` citations in `docs/SPEC_COMPLIANCE.md` rewritten to their Q-17 submodule homes (`src/parser/<submodule>.zig::<symbol>`). Compliance matrix once again resolves against `src/`.
+- **Resolution evidence:** `docs/SPEC_COMPLIANCE.md`, commit `e670231`.
+- **Outstanding:** CI/pre-commit grep gate (item 2 in original recommendation) deferred; not blocking.
 
 ### GAP-0024: `zig build test` prints spurious "failed command" line despite exit 0
 

@@ -278,3 +278,23 @@ GitLab issue operations attempted at 2026-04-18 closure time. `glab auth status`
     defers to `docs/PERFORMANCE.md`; new `## Benchmarks` reference
     section at the end.
   - `CHANGELOG.md` -- Unreleased `### Added` bullet.
+
+## Phase 7 closure batch (2026-04-19)
+
+### Fully closed
+
+| Gap-ID | Title | Closing commit | Resolved | Evidence |
+|--------|-------|----------------|----------|----------|
+| GAP-0023 | SPEC_COMPLIANCE.md cites stale `parser.zig::*` symbols after Q-17 extraction | `e670231` | 2026-04-19 | 11 stale `parser.zig::*` citations rewritten to `src/parser/<submodule>.zig::<symbol>` homes |
+
+### Detailed entries
+
+#### GAP-0023: SPEC_COMPLIANCE.md + docs/ cite stale `parser.zig::*` symbols after Q-17 extraction
+
+- **Status:** Closed -- commit `e670231` (2026-04-19). Moved from `docs/GAP_ANALYSIS.md`.
+- **Issue:** [#62](https://gitlab.com/devnw/zig/toml/-/issues/62)
+- **Category:** Docs
+- **Severity:** Medium
+- **Resolution:** Rewrote all 11 stale `parser.zig::<symbol>` citations in `docs/SPEC_COMPLIANCE.md` to the new `src/parser/<submodule>.zig::<symbol>` path produced by the Q-17 module split (`parser/datetime.zig`, `parser/inline_table.zig`, `parser/string.zig`, `parser/table_path.zig`, `parser/recovery.zig`, `parser/events_sink.zig`). The compliance matrix once again resolves against `src/`, restoring the audit trail that GAP-0021 was closed on.
+- **Resolution evidence:** `docs/SPEC_COMPLIANCE.md`, commit `e670231`.
+- **Outstanding:** CI/pre-commit grep gate (recommendation item 2: fail if `docs/SPEC_COMPLIANCE.md` references a symbol that does not resolve in `src/`) was not landed in this closure; deferred as future hardening. Does not block the GAP-0023 acceptance on "zero stale `parser.zig::*` citations".

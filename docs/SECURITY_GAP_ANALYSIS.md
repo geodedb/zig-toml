@@ -1,10 +1,11 @@
 # Security Gap Analysis
 
-**Last updated:** 2026-04-19 (Phase 6 doc reconciliation — S-1/S-2/S-3/S-5 code-closed; S-13/S-15/S-16 opened)
+**Last updated:** 2026-04-19 (Phase 7 closure batch — S-13, S-15 code-closed)
 **Project:** devnw/zig/toml
-**Phase:** 6 -- parallel-subsystem rewrite reconciled + fuzz coverage gap recorded
+**Phase:** 7 -- encoder unreachable hardening + fuzz coverage expansion landed
 **Scope:** findings from Phase 3 security review (12 original + 3 follow-ups = 15; plus one audit-trail no-finding)
 
+**Phase 7 closure summary:** S-13 closed by replacing the two `unreachable` sites in `src/encoder.zig:122,310` with `return error.UnsupportedValueVariant` plus a direct test (commit `0e6dcfe`). S-15 closed by landing four sibling fuzz harnesses -- `fuzz_parse_recover`, `fuzz_parse_stream`, `fuzz_parse_events`, `fuzz_parallel` -- wired into `zig build test` (commit `6c80c06`).
 **Phase 6 closure summary:** S-1, S-2, S-3, S-5 closed by the `ParallelContext` rewrite series (commits `a68a6d6`, `2a998a6`, `c2b4cec`, `c0ef584`, `fc3dd6c`). S-13, S-15, S-16 newly opened as follow-up to Phase 5's `fuzz_parse` landing — S-11's closure covered `parseWithError` only; the other public APIs remain unfuzzed. S-14 was investigated and recorded as `closed: no-finding` (see Audit Trail).
 **Phase 5 closure summary:** S-6, S-7, S-8, S-11, S-12 fully closed (see Status column and `docs/GAP_ANALYSIS_RESOLVED.md`).
 
@@ -24,15 +25,14 @@
 | Info     | 0 |
 | **Total**| **15** |
 
-### Top 5 Risks (post-Phase-6)
+### Top 5 Risks (post-Phase-7)
 
-1. **S-15 fuzz coverage gap on 4 public APIs** -- Risk 9, confirmed. `tests/fuzz_parse.zig` only exercises `toml.parseWithError`; `parseRecover`, `parseStream`, `parseEvents`, and `parallel.parseDocuments` hit entirely different code paths (error accumulator, reader-drain, SAX callback lifecycle, pool concurrency) and are currently unfuzzed. Directly narrows S-11's closure claim.
-2. **S-9 missing `max_keys`/`max_values` parser caps** -- Risk 9, confirmed. Only `max_bytes` is enforced; adversarial TOML can still pump the allocator via key/value count alone.
-3. **S-4 `deinitPool` UAF window (legacy global)** -- Risk 10, suspected. Module comment `parallel.zig:92-94` explicitly documents the UB; no ThreadSanitizer reproducer yet. Sev reflects uncertainty.
-4. **S-10 `thread_pool` pinned by commit hash only; no signed-tag policy** -- Risk 4, confirmed. Commit+hash pin is the strongest guarantee Zig package manager offers today; keep open until upstream signs tags.
-5. **S-13 `unreachable` in `encoder.zig` reachable from fuzz harness** -- Risk 4, suspected. Parser-invariant drift would turn this into a process abort reachable from public API.
+1. **S-9 missing `max_keys`/`max_values` parser caps** -- Risk 9, confirmed. Only `max_bytes` is enforced; adversarial TOML can still pump the allocator via key/value count alone.
+2. **S-4 `deinitPool` UAF window (legacy global)** -- Risk 10, suspected. Module comment `parallel.zig:92-94` explicitly documents the UB; no ThreadSanitizer reproducer yet. Sev reflects uncertainty.
+3. **S-10 `thread_pool` pinned by commit hash only; no signed-tag policy** -- Risk 4, confirmed. Commit+hash pin is the strongest guarantee Zig package manager offers today; keep open until upstream signs tags.
+4. **S-16 direct fuzz harnesses missing for `Lexer.next` + `parser/datetime.zig`** -- Risk 4, suspected. Submodules reached transitively; pathological Unicode/ISO-8601 inputs under-sampled.
 
-**Closed in Phase 6:** S-1 (risk 16), S-2 (risk 12), S-3 (risk 15), S-5 (risk 9). Historical values retained below for audit trail.
+**Closed in Phase 7:** S-13 (risk 4), S-15 (risk 9). **Closed in Phase 6:** S-1 (risk 16), S-2 (risk 12), S-3 (risk 15), S-5 (risk 9). Historical values retained below for audit trail.
 
 ## Scoring Framework
 
@@ -51,12 +51,12 @@
 | 5 | Med  | 10 | S-4/F4 | `deinitPool` UAF window on legacy global pool pointer | parallel | CWE-416 / A06:2021 | `src/parallel.zig:82-94` (documented as UB) | suspected | public #46 | Open -- module comment now explicitly flags the race as UB; `ParallelContext` replaces it for new callers. Keep open pending ThreadSanitizer reproducer |
 | 6 | Med  |  9 | S-5/F5 | `@panic` on thread-pool init failure -- DoS primitive | parallel | CWE-248, CWE-400 / A05:2021 | `src/parallel.zig:122` (`initDefault` returns `!*`) | confirmed | public #47 | Closed (a68a6d6) -- `ParallelContext.initDefault` returns `!*ParallelContext`; panic path removed |
 | 7 | Med  |  9 | S-9/F9 | Only `max_bytes` caps parser; no `max_keys`/`max_values` | parser | CWE-400, CWE-789 / A05:2021 | `src/parser.zig:23-27` | confirmed | public #48 | Open |
-| 8 | Med  |  9 | S-15/F15 | Fuzz coverage gap on 4 public APIs (`parseRecover`, `parseStream`, `parseEvents`, `parallel.parseDocuments`) | tests/fuzz | CWE-1120 / A05:2021 | `tests/fuzz_parse.zig:19-67` | confirmed | public #65 | Open |
+| 8 | Med  |  9 | S-15/F15 | Fuzz coverage gap on 4 public APIs (`parseRecover`, `parseStream`, `parseEvents`, `parallel.parseDocuments`) | tests/fuzz | CWE-1120 / A05:2021 | `tests/fuzz_parse.zig:19-67` | confirmed | public #65 | Closed (`6c80c06`) -- 4 sibling harnesses landed (`fuzz_parse_recover`, `fuzz_parse_stream`, `fuzz_parse_events`, `fuzz_parallel`); wired into `zig build test` |
 | 9 | Low  |  8 | S-6/F6 | Depth single-gate (`parseValue` only) -- refactor risk | parser | CWE-674 | `src/parser.zig:392, 522` | confirmed (today safe) | public #49 | Closed (cf61421) -- defense-in-depth recursion guards |
 | 10| Low  |  8 | S-7/F7 | Datetime `catch 0` silences `std.fmt.parseInt` | parser | CWE-20, CWE-252 | `src/parser.zig:1343, 1362, 1364` | confirmed | public #50 | Closed (a4b645c) -- propagate error.InvalidDateTime |
 | 11| Low  |  4 | S-10/F10 | `thread_pool` pinned by commit hash only; no signed-tag policy | supply-chain | CWE-1357, CWE-829 / A08:2021 | `build.zig.zon:9` | confirmed | public #51 | Open (blocked on upstream signed-tag support) |
 | 12| Low  |  4 | S-12/F12 | `DebugAllocator` always used in CLI -- info-disclosure surface | cli | CWE-209 | `src/bin/toml_test_decoder.zig:14` | confirmed | public #52 | Closed (ec730f2) -- conditional allocator |
-| 13| Low  |  4 | S-13/F13 | `unreachable` in encoder reachable from public API + fuzz | encoder | CWE-670, CWE-754 | `src/encoder.zig:122`, `src/encoder.zig:310` | suspected | public #64 | Open |
+| 13| Low  |  4 | S-13/F13 | `unreachable` in encoder reachable from public API + fuzz | encoder | CWE-670, CWE-754 | `src/encoder.zig:122`, `src/encoder.zig:310` | suspected | public #64 | Closed (`0e6dcfe`) -- both sites return `error.UnsupportedValueVariant`; direct test added |
 | 14| Low  |  4 | S-16/F16 | Direct fuzz harnesses missing for `Lexer.next` + `parser/datetime.zig` | tests/fuzz | CWE-1120 | `src/lex.zig` (Lexer.next), `src/parser/datetime.zig` | suspected | public #66 | Open |
 | 15| Low  |  3 | S-8/F8 | `DateTime.format` `@intCast(-offset)` panic on `i16.minInt` | value | CWE-190 | `src/value.zig:58` | suspected | public #53 | Closed (203e857) -- guard against i16.minInt |
 
@@ -94,11 +94,11 @@
 
 ### encoder.zig
 
-- S-13 `unreachable` reachable from public encoder API + fuzz harness (Low, suspected). Two sites: `else => unreachable` in the value-kind switch at `src/encoder.zig:122` and `.array, .table => unreachable` in `writeLeafValue` at `src/encoder.zig:310`. Today these are guarded by parser-established invariants, but any drift in the `Value` tagged union would flip them into a reachable process abort from every successful `toml.parseWithError(...)` + `writeTaggedJson(...)` pair -- a path `tests/fuzz_parse.zig:56` exercises on every parse success. Fix: return `error.UnsupportedVariant` in release; `std.debug.assert` in debug.
+- S-13 `unreachable` reachable from public encoder API + fuzz harness (Low, suspected) -- **Closed** commit `0e6dcfe`. Both sites (`src/encoder.zig:122` switch `else`, `src/encoder.zig:310` `.array, .table` arm in `writeLeafValue`) now `return error.UnsupportedValueVariant`. A direct test constructs a `Value` the encoder rejects and asserts the typed error, not a panic. `tests/fuzz_parse.zig` remains green.
 
 ### tests/fuzz
 
-- S-15 fuzz coverage gap on 4 public APIs (Medium, confirmed). `tests/fuzz_parse.zig:19-67` only exercises `toml.parseWithError`. Unfuzzed public entry points: `parseRecover` (error accumulator), `parseStream` (reader drain), `parseEvents` (SAX callback lifecycle), and `parallel.parseDocuments` (pool concurrency). Fix: add `fuzz_parse_recover`, `fuzz_parse_stream`, `fuzz_parse_events`, `fuzz_parallel_parse_documents` harnesses; wire into `build.zig`; keep under `zig build test --fuzz`.
+- S-15 fuzz coverage gap on 4 public APIs (Medium, confirmed) -- **Closed** commit `6c80c06`. Four new harnesses landed: `tests/fuzz_parse_recover.zig`, `tests/fuzz_parse_stream.zig`, `tests/fuzz_parse_events.zig`, `tests/fuzz_parallel.zig`. All four are wired into `build.zig` and run under `zig build test --summary all` (and under `--fuzz` when enabled). 238/238 tests pass with the harnesses attached.
 - S-16 direct fuzz for `Lexer.next` + `parser/datetime.zig` missing (Low, suspected). Currently reached transitively via `fuzz_parse.zig`; pathological unicode, leap-second, and offset edge-cases are under-sampled by the structure-weighted top-level byte generator. Fix: focused byte-level harnesses feeding the submodules directly.
 
 ## Roadmap
@@ -116,14 +116,14 @@
 - ~~Rebuild `validateDocument` on top of the real lexer/parser (S-3).~~ **Done** (`c2b4cec`).
 - Make the legacy `getPool`/`deinitPool` reference-counted to close the UAF window (S-4); the panic-on-init path for the context API is already gone (`a68a6d6` closes S-5).
 - Add `max_keys` / `max_values` / `max_string_bytes` to `ParseOptions` (S-9).
-- Harden encoder `unreachable` sites (S-13): return typed error in release, assert in debug.
-- Stand up 3-4 sibling fuzz harnesses (S-15) covering `parseRecover`, `parseStream`, `parseEvents`, `parallel.parseDocuments`; wire into `build.zig`.
+- ~~Harden encoder `unreachable` sites (S-13): return typed error in release, assert in debug.~~ **Done** (`0e6dcfe`).
+- ~~Stand up 3-4 sibling fuzz harnesses (S-15) covering `parseRecover`, `parseStream`, `parseEvents`, `parallel.parseDocuments`; wire into `build.zig`.~~ **Done** (`6c80c06`).
 
 ### Strategic (> 5 days)
 
 - Centralize depth/recursion accounting in a single `pushDepth`/`popDepth` helper and delete ad-hoc counters (S-6).
 - Ship a supply-chain policy document: signed-tag requirement, reproducible-build verification, and renovate/dependabot-style automation for `build.zig.zon` pins (S-10).
-- Wire fuzz harnesses into scheduled CI with artifact retention and minimizer (addresses the long tail of S-15 + S-16).
+- Wire fuzz harnesses into scheduled CI with artifact retention and minimizer (addresses the long tail of S-16; S-15 harnesses already wired locally via `6c80c06`).
 - Add direct byte-level fuzz harnesses for `Lexer.next` and `parser/datetime.zig` (S-16).
 
 ## Immediate Actions
@@ -133,7 +133,7 @@
 | 1 | **Rotate secrets** -- N/A | No secrets are stored in this repo. `glab` token in local CLI config is out of scope for this project. | N/A |
 | 2 | **Hotfix vs. next release** -- Hotfix S-1 + S-3 + S-2 | Silent false-success from `parallel.parseDocuments` / `validateDocuments` is a correctness *and* trust-boundary regression; downstream consumers cannot rely on the batch API for rejection. | Closed (2a998a6, c2b4cec) |
 | 3 | **Hotfix S-11** fuzz stage | CI today reports "fuzzing is green" while exercising zero fuzz targets. Either delete the stage or land real harnesses before the next tag. | Closed (a302d21) |
-| 4 | **Propose fuzz targets** (pre-requisite for S-11 close) | `fuzz_parse` (`toml.parse`), `fuzz_parse_documents` (`toml.parallel.parseDocuments`), `fuzz_lexer_next` (`lex.Lexer.next`), `fuzz_parse_datetime` (`Parser.parseDateTime`). | Partial -- only `fuzz_parse` landed; the other three are the body of S-15/S-16. |
+| 4 | **Propose fuzz targets** (pre-requisite for S-11 close) | `fuzz_parse` (`toml.parse`), `fuzz_parse_documents` (`toml.parallel.parseDocuments`), `fuzz_lexer_next` (`lex.Lexer.next`), `fuzz_parse_datetime` (`Parser.parseDateTime`). | Closed for S-15 scope -- `fuzz_parse_recover/_stream/_events/_parallel` landed in `6c80c06`; `fuzz_lexer_next` / `fuzz_parse_datetime` remain open under S-16. |
 | 5 | **S-5 panic removed** in `ParallelContext.initDefault` | Error-return path replaces `@panic` for new callers; legacy path still uses `callLegacyOnce` but propagates via `legacy_init_error`. | Closed (a68a6d6) |
 
 ## Confidential-issue rationale
@@ -147,7 +147,7 @@ in confidential GitLab issues; this public doc keeps only root-cause + `file:lin
 - S-4 needs a ThreadSanitizer or targeted race-test reproducer before we can claim `confirmed`.
 - S-8 `i16.minInt` panic -- needs a unit test that constructs a `DateTime` with `offset_minutes = -32768` directly; likely unreachable from the parser (parser validates before storing) but defense-in-depth still warranted.
 - S-10 depends on upstream `devnw/zig/thread-pool` publishing signed tags; raise with upstream maintainers.
-- S-13 is `suspected` because all known `Value` variants today are handled elsewhere in `encoder.zig`; a future variant addition without a matching switch arm would flip this to `confirmed`.
+- S-13, S-15 closed 2026-04-19 in Phase 7 (see commits `0e6dcfe` / `6c80c06`); S-16 remains open.
 - S-13, S-15, S-16 filed as public issues #64, #65, #66 respectively on 2026-04-19.
 
 ## Audit Trail

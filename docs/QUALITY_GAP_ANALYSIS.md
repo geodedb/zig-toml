@@ -1,6 +1,6 @@
 # Quality Gap Analysis
 
-Last updated: 2026-04-19 (Phase 3 re-scan added Q-19..Q-23 post Q-17 split)
+Last updated: 2026-04-19 (Phase 7 closure batch: Q-19, Q-20, Q-22 closed)
 
 Source: Phase 3 quality-reviewer output (23 findings: 18 original + Q-19..Q-23 from 2026-04-19 re-scan). Scoring formula:
 `PriorityScore = (severity_weight * blast_radius * recency_of_change) / effort_estimate`
@@ -13,6 +13,13 @@ Q-19..Q-23 use the alternate scale `Impact(1-5) * Likelihood(1-5) * 4` (quality-
 - Unchanged: Q-1, Q-2, Q-3, Q-4, Q-5, Q-6, Q-7, Q-12, Q-13, Q-17
 - Closed (Plan 14): Q-8 runBatch helper extracted
 - Closed (Plan 15): Q-9 (ARCHITECTURE.md structural accuracy, test-enforced), Q-11 (CHANGELOG reconciliation, test-enforced), Q-16 (leak gate extended to all four optimize modes + api-drift + coverage-floor jobs)
+
+## Phase 7 closure summary (2026-04-19)
+
+- Q-19 closed: 4 dead parser trampolines deleted; parser.zig 679->657 LOC (commit `e96909c`).
+- Q-20 closed: 4 CLI datetime parsers deduped into `parseDatetimeLiteral`; encoder_cli.zig 307->268 LOC (commit `bbe989c`).
+- Q-22 closed: long-function decomposition across lexer + Q-17 submodules. Four sub-commits -- `a0c2005` (Q-22a `lexer::next` 111->40 LOC), `a8bf3a4` (Q-22b `lexNumberOrDateTime` 167->50 LOC), `76ef503` (Q-22c `resolveTablePath` 120->24 LOC), `22cd76d` (Q-22d `recoverAdvancePastLine` 92->24 LOC).
+- Verification: `zig fmt --check` clean; `zig build check` clean; `zig build test --summary all` = 238/238 tests pass, 26/26 build steps succeed.
 
 ## Summary
 
@@ -48,12 +55,12 @@ Note: Q-1 (Critical, PS 41.7) is structurally severe -- two parsers means every 
 | 8 | Medium | 22.5 | maintainability | Q-8 three 35-LOC near-identical submitBatch blocks | parallel.zig | src/parallel.zig:126-163/280-312/393-430 | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Extract submitBatchImpl(kind) generic | @benjiv | 3 d | Closed (Plan 14) -- runBatch comptime-generic helper owns ceiling-division chunking, submitBatch, sequential fallback, and WaitGroup wait; all 5 call-sites (3 Ctx + 2 legacy shims) delegate to it |
 | 9 | Medium | 22.5 | tests | Q-14 parallel tests all well-formed; no negative/diff cases | parallel.zig tests | tests/parallel_* | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Add negative + serial-vs-parallel differential tests | @benjiv | 3 d | Closed (befaff0) |
 | 10 | Low | 20.0 | maintainability | Q-18 MAX_CHUNKS=64 magic caps >64-core machines | parallel.zig | src/parallel.zig:100 | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Make configurable; default std.Thread.getCpuCount | @benjiv | 1 d | Closed (037a918) -- data-loss fix landed; configurability deferred (reopened if needed) |
-| 11 | Low | 20.0 | cleanup | Q-19 dead trampolines in parser.zig (Q-17 leftover) | parser.zig | src/parser.zig:561-573,579-589 | [#54](https://gitlab.com/devnw/zig/toml/-/work_items/54) | Delete decodeEscapes/decodeEscapeChar/validateIntegerFormat/validateFloatFormat; fix SPEC_COMPLIANCE path refs | @benjiv | 30 min | open |
+| 11 | Low | 20.0 | cleanup | Q-19 dead trampolines in parser.zig (Q-17 leftover) | parser.zig | src/parser.zig:561-573,579-589 | [#54](https://gitlab.com/devnw/zig/toml/-/work_items/54) | Delete decodeEscapes/decodeEscapeChar/validateIntegerFormat/validateFloatFormat; fix SPEC_COMPLIANCE path refs | @benjiv | 30 min | Closed (`e96909c`) -- 4 trampolines deleted; parser.zig 679->657 LOC |
 | 12 | Medium | 18.0 | api-contract | Q-12 Document-by-value invalidates arena on copy/move | value.zig, api | src/value.zig:198-217 | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Switch public API to Document pointer or mark non-copyable | @benjiv | 1 wk | open |
 | 13 | High | 16.0 | tests | Q-13 no grammar coverage; toml-test corpus not wired | tests, ci-cd | tests/accept.zig, src/toml.zig | [#39](https://gitlab.com/devnw/zig/toml/-/work_items/39) | Vendor toml-test; add zig build test-compliance; gate CI | @benjiv | 2-3 wk | open |
 | 14 | Medium | 16.0 | ci-cd | Q-16 Linux-only CI, no leak gate, no coverage, no API drift | ci-cd | .gitlab-ci.yml | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Add macOS+Windows matrix, leak gate, coverage threshold, API-drift check | @benjiv | 1 wk | Closed (Plan 15, b62f27e) -- leak gate extended to all 4 optimize modes via `.leak-gate` YAML anchor; `api-drift` job diffs src/toml.zig pub surface against docs/PUBLIC_API.md; `coverage-floor` job enforces COVERAGE_TEST_FLOOR on Build Summary. Cross-platform matrix is tracked separately as GAP-0018 / GAP-0019. |
-| 15 | Medium | 13.5 | maintainability | Q-20 duplicate datetime parsers in encoder_cli.zig | encoder_cli.zig, parser/datetime.zig | src/encoder_cli.zig:121-169 | [#55](https://gitlab.com/devnw/zig/toml/-/work_items/55) | Extract shared `datetime.decodeDateTime`; remove duplicates | @benjiv | 1 d | open |
-| 16 | Medium | 12.0 | maintainability | Q-22 long functions not previously tracked (lexer + Q-17 submodules) | lexer.zig, parser/recovery.zig, parser/table_path.zig | src/lexer.zig::next(~111), ::lexNumberOrDateTime(~167); src/parser/recovery.zig:198 recoverAdvancePastLine(~92); src/parser/table_path.zig:32 resolveTablePath(~120) | [#57](https://gitlab.com/devnw/zig/toml/-/work_items/57) | Decompose each into <=60 LOC helpers | @benjiv | 3-5 d | open |
+| 15 | Medium | 13.5 | maintainability | Q-20 duplicate datetime parsers in encoder_cli.zig | encoder_cli.zig, parser/datetime.zig | src/encoder_cli.zig:121-169 | [#55](https://gitlab.com/devnw/zig/toml/-/work_items/55) | Extract shared `datetime.decodeDateTime`; remove duplicates | @benjiv | 1 d | Closed (`bbe989c`) -- 4 parsers deduped into `parseDatetimeLiteral`; encoder_cli.zig 307->268 LOC |
+| 16 | Medium | 12.0 | maintainability | Q-22 long functions not previously tracked (lexer + Q-17 submodules) | lexer.zig, parser/recovery.zig, parser/table_path.zig | src/lexer.zig::next(~111), ::lexNumberOrDateTime(~167); src/parser/recovery.zig:198 recoverAdvancePastLine(~92); src/parser/table_path.zig:32 resolveTablePath(~120) | [#57](https://gitlab.com/devnw/zig/toml/-/work_items/57) | Decompose each into <=60 LOC helpers | @benjiv | 3-5 d | Closed (`a0c2005`+`a8bf3a4`+`76ef503`+`22cd76d`) -- all four long functions split to <=60 LOC |
 | 17 | Low | 12.0 | ci-cd | Q-15 pre-commit check-todos hook no-op; zig fmt excludes tests/examples | tooling | .pre-commit-config.yaml | [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42) | Fix hook command; broaden fmt scope | @benjiv | 2 h | Closed (a53b38c) |
 | 18 | High | 9.0 | maintainability | Q-5 datetime family ~320 LOC, 4 near-parallel parsers | parser.zig | src/parser.zig:1268-1586 | [#35](https://gitlab.com/devnw/zig/toml/-/work_items/35) | Unify into single datetime parser with kind flag; share sub-parsers | @benjiv | 2 wk | open |
 | 19 | Low | 8.0 | api-contract | Q-23 over-exports in Q-17 submodules (7 pub helpers with no cross-module callers) | parser/datetime.zig, parser/inline_table.zig, parser/string.zig | datetime.zig:290,294,301,307,311; inline_table.zig:247; string.zig:93 | [#58](https://gitlab.com/devnw/zig/toml/-/work_items/58) | Drop `pub` on 7 internal helpers | @benjiv | 1 h | open |
@@ -90,8 +97,8 @@ Note: Q-1 (Critical, PS 41.7) is structurally severe -- two parsers means every 
 - **Q-7** parseInlineTable 122 LOC -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
 - **Q-8** 3 near-identical submitBatch blocks -- **Closed** (Plan 14) runBatch helper extracted -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
 - **Q-18** MAX_CHUNKS=64 magic -- **Closed** commit `037a918` (data-loss fix; configurability deferred) -- batched [#42](https://gitlab.com/devnw/zig/toml/-/work_items/42)
-- **Q-20** duplicate datetime parsers in encoder_cli.zig -- [#55](https://gitlab.com/devnw/zig/toml/-/work_items/55)
-- **Q-22** long functions in lexer + Q-17 submodules -- [#57](https://gitlab.com/devnw/zig/toml/-/work_items/57)
+- **Q-20** duplicate datetime parsers in encoder_cli.zig -- **Closed** commit `bbe989c` -- [#55](https://gitlab.com/devnw/zig/toml/-/work_items/55)
+- **Q-22** long functions in lexer + Q-17 submodules -- **Closed** commits `a0c2005` (Q-22a), `a8bf3a4` (Q-22b), `76ef503` (Q-22c), `22cd76d` (Q-22d) -- [#57](https://gitlab.com/devnw/zig/toml/-/work_items/57)
 
 ### architecture (3)
 
@@ -101,7 +108,7 @@ Note: Q-1 (Critical, PS 41.7) is structurally severe -- two parsers means every 
 
 ### cleanup (1)
 
-- **Q-19** dead trampolines in parser.zig (Q-17 leftover) -- [#54](https://gitlab.com/devnw/zig/toml/-/work_items/54)
+- **Q-19** dead trampolines in parser.zig (Q-17 leftover) -- **Closed** commit `e96909c` -- [#54](https://gitlab.com/devnw/zig/toml/-/work_items/54)
 
 ### ci-cd (2)
 
@@ -117,7 +124,7 @@ Note: Q-1 (Critical, PS 41.7) is structurally severe -- two parsers means every 
 - Q-11 reconcile CHANGELOG / ROADMAP
 - Q-9 documentation patch for ARCHITECTURE.md
 - Q-10 documentation patch for API.md
-- Q-19 delete dead parser.zig trampolines (30 min)
+- ~~Q-19 delete dead parser.zig trampolines (30 min)~~ **Done** (`e96909c`)
 - Q-23 drop `pub` on 7 internal Q-17 helpers (1 h)
 
 ### Medium (1-5 days)
@@ -127,8 +134,8 @@ Note: Q-1 (Critical, PS 41.7) is structurally severe -- two parsers means every 
 - Q-14 add differential parallel tests
 - Q-7 refactor parseInlineTable
 - Q-2 route validateDocument through real parser
-- Q-20 extract shared `datetime.decodeDateTime`; drop encoder_cli duplicates
-- Q-22 decompose long functions in lexer + Q-17 submodules
+- ~~Q-20 extract shared `datetime.decodeDateTime`; drop encoder_cli duplicates~~ **Done** (`bbe989c`)
+- ~~Q-22 decompose long functions in lexer + Q-17 submodules~~ **Done** (`a0c2005`+`a8bf3a4`+`76ef503`+`22cd76d`)
 
 ### Strategic (> 5 days)
 
