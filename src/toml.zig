@@ -931,6 +931,148 @@ test "parseRecover returns empty document for empty input" {
     try std.testing.expect(result.document.root.* == .table);
 }
 
+test "parseRecover: one bad line between good ones" {
+    const input = "a = 1\nb = = 2\nc = 3\n";
+    var result = try parseRecover(std.testing.allocator, input, .{ .recovery_mode = .recover });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.errors.len);
+    try std.testing.expectEqual(@as(u32, 2), result.errors[0].line);
+
+    const a = result.document.root.get("a") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 1), a.integer);
+
+    const c = result.document.root.get("c") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 3), c.integer);
+
+    // The bad key "b" must not have been inserted.
+    try std.testing.expect(result.document.root.get("b") == null);
+}
+
+test "parseRecover: multiple consecutive bad lines log each, no infinite loop" {
+    const input =
+        \\a = = 1
+        \\b = = 2
+        \\c = = 3
+        \\ok = "fine"
+        \\
+    ;
+    var result = try parseRecover(std.testing.allocator, input, .{ .recovery_mode = .recover });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), result.errors.len);
+
+    const ok = result.document.root.get("ok") orelse unreachable;
+    try std.testing.expectEqualStrings("fine", ok.string);
+}
+
+test "parseRecover: broken table header advances to next valid section" {
+    const input =
+        \\[good]
+        \\x = 1
+        \\[bad..section]
+        \\y = 2
+        \\[also_good]
+        \\z = 3
+        \\
+    ;
+    var result = try parseRecover(std.testing.allocator, input, .{ .recovery_mode = .recover });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.errors.len >= 1);
+
+    const good = result.document.root.get("good") orelse unreachable;
+    const x = good.get("x") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 1), x.integer);
+
+    const also_good = result.document.root.get("also_good") orelse unreachable;
+    const z = also_good.get("z") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 3), z.integer);
+}
+
+test "parseRecover: bad inline table is bounded by its closing brace" {
+    const input =
+        \\a = 1
+        \\point = { x = 1, y = = 2, z = 3 }
+        \\after = 99
+        \\
+    ;
+    var result = try parseRecover(std.testing.allocator, input, .{ .recovery_mode = .recover });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.errors.len >= 1);
+
+    const a = result.document.root.get("a") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 1), a.integer);
+
+    const after = result.document.root.get("after") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 99), after.integer);
+}
+
+test "parseRecover: bad array is bounded by its closing bracket" {
+    const input =
+        \\a = 1
+        \\xs = [1, 2, = 3, 4]
+        \\after = "ok"
+        \\
+    ;
+    var result = try parseRecover(std.testing.allocator, input, .{ .recovery_mode = .recover });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.errors.len >= 1);
+
+    const a = result.document.root.get("a") orelse unreachable;
+    try std.testing.expectEqual(@as(i64, 1), a.integer);
+
+    const after = result.document.root.get("after") orelse unreachable;
+    try std.testing.expectEqualStrings("ok", after.string);
+}
+
+test "parseRecover: honours max_recovery_errors cap" {
+    // 20 bad lines; cap at 5.
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(std.testing.allocator);
+    var i: usize = 0;
+    while (i < 20) : (i += 1) {
+        try buf.appendSlice(std.testing.allocator, "x = = 1\n");
+    }
+
+    var result = try parseRecover(std.testing.allocator, buf.items, .{
+        .recovery_mode = .recover,
+        .max_recovery_errors = 5,
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.errors.len <= 5);
+    try std.testing.expect(result.errors.len >= 1);
+}
+
+test "strict mode (default) still fails on first error" {
+    const input = "a = 1\nb = = 2\nc = 3\n";
+    const result = parseWithError(std.testing.allocator, input, .{});
+    switch (result) {
+        .ok => |d| {
+            d.deinit();
+            try std.testing.expect(false);
+        },
+        .err => |e| {
+            try std.testing.expectEqual(@as(u32, 2), e.line);
+        },
+    }
+}
+
+test "parseRecover: invalid UTF-8 reported without partial document" {
+    const input = "a = \"\xff\xfe\"\n";
+    var result = try parseRecover(std.testing.allocator, input, .{ .recovery_mode = .recover });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.errors.len);
+    try std.testing.expectEqual(ErrorCode.InvalidUtf8, result.errors[0].code);
+    // Root table should exist but be empty.
+    try std.testing.expect(result.document.root.* == .table);
+    try std.testing.expectEqual(@as(usize, 0), result.document.root.table.map.count());
+}
+
 test "ParseOptions exposes recovery_mode and max_recovery_errors" {
     const opts: ParseOptions = .{};
     try std.testing.expectEqual(parser_mod.RecoveryMode.strict, opts.recovery_mode);
