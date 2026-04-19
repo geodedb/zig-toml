@@ -224,4 +224,58 @@ pub fn build(b: *std.Build) void {
     }
     const run_step = b.step("run", "Run the toml-test-decoder");
     run_step.dependOn(&run_cmd.step);
+
+    // ------------------------------------------------------------------
+    // Benchmark suite (GAP-0011).
+    //
+    // Each benchmark lives in bench/<name>.zig and is wired as its own
+    // build step `zig build bench-<name>`. The pre-existing `bench` step
+    // (tests/bench_table_insert.zig) stays wired above; here we add the
+    // richer `bench/` tree. A separate `zig build bench-all` orchestrator
+    // runs every benchmark in a single process and prints a summary
+    // table. `-Dbench-filter=<name>` filters the per-benchmark loop.
+    // ------------------------------------------------------------------
+    const bench_filter = b.option(
+        []const u8,
+        "bench-filter",
+        "Only run benchmarks whose short name contains this substring",
+    );
+
+    const BenchSpec = struct {
+        name: []const u8, // short name, e.g. "parse_small"
+        root: []const u8, // "bench/parse_small.zig"
+    };
+
+    const bench_specs = [_]BenchSpec{
+        .{ .name = "parse_small", .root = "bench/parse_small.zig" },
+    };
+
+    for (bench_specs) |spec| {
+        if (bench_filter) |f| {
+            if (std.mem.indexOf(u8, spec.name, f) == null) continue;
+        }
+        const mod = b.createModule(.{
+            .root_source_file = b.path(spec.root),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        });
+        if (tp_mod) |tm| mod.addImport("thread_pool", tm);
+
+        const exe_bench = b.addExecutable(.{
+            .name = b.fmt("bench-{s}", .{spec.name}),
+            .root_module = mod,
+        });
+        const run_bench = b.addRunArtifact(exe_bench);
+        run_bench.step.dependOn(b.getInstallStep());
+
+        const single_step = b.step(
+            b.fmt("bench-{s}", .{spec.name}),
+            b.fmt("Run the {s} benchmark", .{spec.name}),
+        );
+        single_step.dependOn(&run_bench.step);
+        bench_step.dependOn(&run_bench.step);
+    }
 }
