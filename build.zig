@@ -95,6 +95,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_accept_tests = b.addRunArtifact(accept_tests);
 
+    // Streaming parser acceptance tests (GAP-0016).
+    const streaming_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/streaming.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    const run_streaming_tests = b.addRunArtifact(streaming_tests);
+
     // Encoder round-trip tests -- parse(encode(parse(x))) must yield
     // the same tagged-JSON projection as parse(x) for every corpus case.
     const encoder_roundtrip_tests = b.addTest(.{
@@ -168,6 +181,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
+    test_step.dependOn(&run_streaming_tests.step);
     test_step.dependOn(&run_encoder_roundtrip_tests.step);
     test_step.dependOn(&run_encoder_golden_tests.step);
     test_step.dependOn(&run_differential_tests.step);
