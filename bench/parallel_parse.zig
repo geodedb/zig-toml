@@ -72,6 +72,9 @@ pub fn runAndPrint(alloc: std.mem.Allocator) !common.Stats {
         stats.printHuman();
         last = stats;
     }
+    // last.name points at freed memory; overwrite with a stable literal so
+    // callers (the bench-all orchestrator summary row) see something sane.
+    last.name = "parallel_parse";
     return last;
 }
 

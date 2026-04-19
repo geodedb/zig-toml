@@ -284,4 +284,28 @@ pub fn build(b: *std.Build) void {
         single_step.dependOn(&run_bench.step);
         bench_step.dependOn(&run_bench.step);
     }
+
+    // Aggregate orchestrator (bench/main.zig). Runs everything in one
+    // process and prints a summary table. Separate step so a single
+    // benchmark failure does not hide the others.
+    const bench_all_mod = b.createModule(.{
+        .root_source_file = b.path("bench/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "toml", .module = toml_mod },
+        },
+    });
+    if (tp_mod) |tm| bench_all_mod.addImport("thread_pool", tm);
+    const bench_all_exe = b.addExecutable(.{
+        .name = "bench-all",
+        .root_module = bench_all_mod,
+    });
+    const run_bench_all = b.addRunArtifact(bench_all_exe);
+    run_bench_all.step.dependOn(b.getInstallStep());
+    const bench_all_step = b.step(
+        "bench-all",
+        "Run all benchmarks in one process",
+    );
+    bench_all_step.dependOn(&run_bench_all.step);
 }
