@@ -87,102 +87,78 @@ pub const Lexer = struct {
 
         const start_pos = self.pos;
         const c = self.peek();
+        return switch (c) {
+            '#' => try self.lexComment(),
+            '\n', '\r' => try self.lexNewline(start_pos),
+            '=' => self.singleCharToken(.equals, start_pos),
+            ',' => self.singleCharToken(.comma, start_pos),
+            '.' => self.singleCharToken(.dot, start_pos),
+            '{' => self.singleCharToken(.left_brace, start_pos),
+            '}' => self.singleCharToken(.right_brace, start_pos),
+            '[' => self.lexBracket(start_pos, .left_bracket, .double_bracket_open),
+            ']' => self.lexBracket(start_pos, .right_bracket, .double_bracket_close),
+            '"' => if (self.lookAhead(1) == '"' and self.lookAhead(2) == '"')
+                self.lexMultilineBasicString()
+            else
+                self.lexBasicString(),
+            '\'' => if (self.lookAhead(1) == '\'' and self.lookAhead(2) == '\'')
+                self.lexMultilineLiteralString()
+            else
+                self.lexLiteralString(),
+            else => blk: {
+                if (isDigit(c) or c == '+' or c == '-') break :blk self.lexNumberOrDateTime();
+                if (isBareKeyChar(c)) break :blk try self.lexBareKeyOrBool();
+                self.parse_error = err.makeError(.UnexpectedToken, start_pos, "unexpected character");
+                break :blk error.ParseFailed;
+            },
+        };
+    }
 
-        // Comment
-        if (c == '#') {
-            return try self.lexComment();
-        }
+    /// Consume a single byte and return a Token with `tag` spanning it.
+    fn singleCharToken(self: *Lexer, tag: TokenTag, start_pos: Position) Token {
+        self.advance();
+        return Token{
+            .tag = tag,
+            .start = start_pos.byte_index,
+            .end = self.pos.byte_index,
+            .pos = start_pos,
+        };
+    }
 
-        // Newline (LF or CR+LF)
-        if (c == '\n') {
+    /// Consume `[` or `]`, optionally promoting to the doubled form when
+    /// the next byte repeats. `single` is the single-bracket tag, `double`
+    /// is its doubled variant.
+    fn lexBracket(self: *Lexer, start_pos: Position, single: TokenTag, double: TokenTag) Token {
+        self.advance();
+        const tag = if (self.peek() == self.input[start_pos.byte_index]) blk: {
             self.advance();
-            return Token{
-                .tag = .newline,
-                .start = start_pos.byte_index,
-                .end = self.pos.byte_index,
-                .pos = start_pos,
-            };
-        }
-        if (c == '\r') {
-            if (self.lookAhead(1) == '\n') {
-                self.advance(); // CR
-                self.advance(); // LF
-                return Token{
-                    .tag = .newline,
-                    .start = start_pos.byte_index,
-                    .end = self.pos.byte_index,
-                    .pos = start_pos,
-                };
-            } else {
+            break :blk double;
+        } else single;
+        return Token{
+            .tag = tag,
+            .start = start_pos.byte_index,
+            .end = self.pos.byte_index,
+            .pos = start_pos,
+        };
+    }
+
+    /// Consume LF or CRLF as a newline token. A bare CR (CR not followed
+    /// by LF) is a hard lex error per the TOML spec.
+    fn lexNewline(self: *Lexer, start_pos: Position) !Token {
+        if (self.peek() == '\r') {
+            if (self.lookAhead(1) != '\n') {
                 self.parse_error = err.makeError(.BareCarriageReturn, start_pos, "bare carriage return not allowed");
                 return error.ParseFailed;
             }
+            self.advance(); // CR
         }
-
-        // Structural tokens
-        if (c == '=') {
-            self.advance();
-            return Token{ .tag = .equals, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-        }
-        if (c == ',') {
-            self.advance();
-            return Token{ .tag = .comma, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-        }
-        if (c == '.') {
-            self.advance();
-            return Token{ .tag = .dot, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-        }
-        if (c == '{') {
-            self.advance();
-            return Token{ .tag = .left_brace, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-        }
-        if (c == '}') {
-            self.advance();
-            return Token{ .tag = .right_brace, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-        }
-        if (c == '[') {
-            self.advance();
-            if (self.peek() == '[') {
-                self.advance();
-                return Token{ .tag = .double_bracket_open, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-            }
-            return Token{ .tag = .left_bracket, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-        }
-        if (c == ']') {
-            self.advance();
-            if (self.peek() == ']') {
-                self.advance();
-                return Token{ .tag = .double_bracket_close, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-            }
-            return Token{ .tag = .right_bracket, .start = start_pos.byte_index, .end = self.pos.byte_index, .pos = start_pos };
-        }
-
-        // Strings
-        if (c == '"') {
-            if (self.lookAhead(1) == '"' and self.lookAhead(2) == '"') {
-                return self.lexMultilineBasicString();
-            }
-            return self.lexBasicString();
-        }
-        if (c == '\'') {
-            if (self.lookAhead(1) == '\'' and self.lookAhead(2) == '\'') {
-                return self.lexMultilineLiteralString();
-            }
-            return self.lexLiteralString();
-        }
-
-        // Numbers, dates, times, or bare keys
-        if (isDigit(c) or c == '+' or c == '-') {
-            return self.lexNumberOrDateTime();
-        }
-
-        // Boolean or bare key
-        if (isBareKeyChar(c)) {
-            return try self.lexBareKeyOrBool();
-        }
-
-        self.parse_error = err.makeError(.UnexpectedToken, start_pos, "unexpected character");
-        return error.ParseFailed;
+        self.advance(); // LF
+        return Token{
+            .tag = .newline,
+            .start = start_pos.byte_index,
+            .end = self.pos.byte_index,
+            .pos = start_pos,
+        };
     }
 
     fn lexComment(self: *Lexer) !Token {
