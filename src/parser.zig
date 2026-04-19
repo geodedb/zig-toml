@@ -18,37 +18,20 @@ const datetime = @import("parser/datetime.zig");
 const number = @import("parser/number.zig");
 const string = @import("parser/string.zig");
 const recovery = @import("parser/recovery.zig");
+const events_sink = @import("parser/events_sink.zig");
 const Value = val.Value;
 const Document = val.Document;
 const TableEntry = val.TableEntry;
 
 pub const TomlVersion = lex.TomlVersion;
 
-const events_mod = @import("events.zig");
-pub const Event = events_mod.Event;
-pub const EventHandler = events_mod.EventHandler;
+pub const Event = events_sink.Event;
+pub const EventHandler = events_sink.EventHandler;
 
-/// Output sink for the shared recursive-descent walker. `parse` uses
-/// `.document` (write into an arena-backed Value tree). `parseEvents`
-/// uses `.events` (dispatch Event values to the caller).
-///
-/// Every sink method takes borrowed slices -- the caller must copy
-/// anything it needs past the call. For the document sink the parser
-/// already dupes into the arena; for the event sink the user is told
-/// in the Event docstring that slices only live for the handleFn call.
-const ParseSink = union(enum) {
-    document: DocSink,
-    events: EventSink,
-
-    const DocSink = struct {
-        alloc: Allocator,
-        root: *Value,
-    };
-
-    const EventSink = struct {
-        handler: EventHandler,
-    };
-};
+/// Output sink for the shared recursive-descent walker. Definition is
+/// hosted in `parser/events_sink.zig`; re-exported here so `Parser`
+/// can embed it by value.
+const ParseSink = events_sink.ParseSink;
 
 /// Error-handling behaviour for `parse`/`parseWithError` vs. `parseRecover`.
 ///
@@ -107,8 +90,9 @@ pub const Parser = struct {
     /// against options.max_values.
     values_allocated: usize,
     /// Output sink. `parse` installs `.document`; `parseEvents` installs
-    /// `.events`. The walker dispatches to sink helpers (`sinkEmit*`) at
-    /// every construct boundary so both modes share a single walk.
+    /// `.events`. The walker dispatches to sink helpers in
+    /// `parser/events_sink.zig` (`emit*`) at every construct boundary
+    /// so both modes share a single walk.
     sink: ParseSink,
 
     pub fn init(alloc: Allocator, input: []const u8, options: ParseOptions) Parser {
@@ -259,8 +243,8 @@ pub const Parser = struct {
         // the handleFn call because events are emitted synchronously
         // from within this walk.
         if (self.sink == .events) {
-            const rendered = try renderKeyPath(alloc, path.items);
-            try self.sinkEmitTableHeader(rendered, is_array_of_tables);
+            const rendered = try events_sink.renderKeyPath(alloc, path.items);
+            try events_sink.emitTableHeader(self, rendered, is_array_of_tables);
         }
 
         // Navigate/create the table path
@@ -417,7 +401,7 @@ pub const Parser = struct {
         if (self.sink == .events and value_is_container) {
             // Use the final key for the event; for dotted keys this is
             // the leaf segment the container is bound to.
-            try self.sinkEmitKeyValueContainer(path.items[path.items.len - 1]);
+            try events_sink.emitKeyValueContainer(self, path.items[path.items.len - 1]);
         }
 
         // Parse value
@@ -469,7 +453,7 @@ pub const Parser = struct {
                 // above) so its `[`/`{` start event immediately follows
                 // the key in the event stream.
                 if (!value_is_container) {
-                    try self.sinkEmitKeyValueScalar(final_key, value.*);
+                    try events_sink.emitKeyValueScalar(self, final_key, value.*);
                 }
             },
         }
@@ -661,7 +645,7 @@ pub const Parser = struct {
         try items.ensureTotalCapacity(alloc, 16);
 
         // For event-mode, announce array start before consuming any items.
-        try self.sinkEmitSimple(.array_start);
+        try events_sink.emitSimple(self, .array_start);
 
         // Skip whitespace and newlines
         try self.skipArrayWhitespace();
@@ -676,7 +660,7 @@ pub const Parser = struct {
             // `array_item`.
             switch (item.*) {
                 .table, .array => {},
-                else => try self.sinkEmitSimple(.{ .array_item = item.* }),
+                else => try events_sink.emitSimple(self, .{ .array_item = item.* }),
             }
 
             try self.skipArrayWhitespace();
@@ -710,7 +694,7 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        try self.sinkEmitSimple(.array_end);
+        try events_sink.emitSimple(self, .array_end);
 
         return Value{ .array = .{ .items = items, .is_static = true } };
     }
@@ -733,7 +717,7 @@ pub const Parser = struct {
         // Event-mode: announce the outer array start. The inner array's
         // own start/end fires from parseArrayContents below, so the
         // consumer observes `[, [, ..., ], ... , ]`.
-        try self.sinkEmitSimple(.array_start);
+        try events_sink.emitSimple(self, .array_start);
 
         // Parse the inner array (we're already "inside" it after consuming [[)
         try self.bumpValues();
@@ -760,7 +744,7 @@ pub const Parser = struct {
             // Same scalar-vs-container distinction as parseArray.
             switch (item.*) {
                 .table, .array => {},
-                else => try self.sinkEmitSimple(.{ .array_item = item.* }),
+                else => try events_sink.emitSimple(self, .{ .array_item = item.* }),
             }
             try self.skipArrayWhitespace();
         }
@@ -785,7 +769,7 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        try self.sinkEmitSimple(.array_end);
+        try events_sink.emitSimple(self, .array_end);
 
         return Value{ .array = .{ .items = outer_items, .is_static = true } };
     }
@@ -804,7 +788,7 @@ pub const Parser = struct {
         // Event-mode: announce this inner array. Called from
         // parseNestedArrayFromDoubleBracket which has already emitted
         // its own outer `.array_start`.
-        try self.sinkEmitSimple(.array_start);
+        try events_sink.emitSimple(self, .array_start);
 
         try self.skipArrayWhitespace();
 
@@ -813,7 +797,7 @@ pub const Parser = struct {
             try items.append(alloc, item.*);
             switch (item.*) {
                 .table, .array => {},
-                else => try self.sinkEmitSimple(.{ .array_item = item.* }),
+                else => try events_sink.emitSimple(self, .{ .array_item = item.* }),
             }
 
             try self.skipArrayWhitespace();
@@ -847,7 +831,7 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
-        try self.sinkEmitSimple(.array_end);
+        try events_sink.emitSimple(self, .array_end);
 
         return Value{ .array = .{ .items = items, .is_static = true } };
     }
@@ -874,7 +858,7 @@ pub const Parser = struct {
         // Event-mode: announce the inline table after the `{` has been
         // consumed (inside parseInlineTableHeader) and before the body
         // keys are parsed so the handler sees `{`, kv:..., kv:..., `}`.
-        try self.sinkEmitSimple(.inline_table_start);
+        try events_sink.emitSimple(self, .inline_table_start);
 
         // Capture the first offending token position for v1.0 restriction
         // diagnostics so error carets point at the violating `,` / newline
@@ -884,7 +868,7 @@ pub const Parser = struct {
         try self.parseInlineTableBody(alloc, &header, &trailing_comma_pos, &newline_inside_pos);
         try self.validateInlineTableV10Restrictions(&header, trailing_comma_pos, newline_inside_pos);
 
-        try self.sinkEmitSimple(.inline_table_end);
+        try events_sink.emitSimple(self, .inline_table_end);
 
         return Value{ .table = .{ .map = header.map, .is_inline = true, .is_closed_inline = true } };
     }
@@ -940,13 +924,13 @@ pub const Parser = struct {
                 else => false,
             };
             if (self.sink == .events and body_value_is_container) {
-                try self.sinkEmitKeyValueContainer(path.items[path.items.len - 1]);
+                try events_sink.emitKeyValueContainer(self, path.items[path.items.len - 1]);
             }
 
             const value = try self.parseValue(alloc);
 
             if (self.sink == .events and !body_value_is_container) {
-                try self.sinkEmitKeyValueScalar(path.items[path.items.len - 1], value.*);
+                try events_sink.emitKeyValueScalar(self, path.items[path.items.len - 1], value.*);
             }
 
             // Handle dotted keys in inline table
@@ -1061,29 +1045,6 @@ pub const Parser = struct {
         }
     }
 
-    /// Join dotted-key path segments into a single `a.b.c` slice. The
-    /// returned slice is allocated from `alloc` and is therefore stable
-    /// for as long as that allocator survives (document arena for
-    /// `parse`, throwaway arena for `parseEvents`). Used to render the
-    /// slice carried by `.table_header` / `.array_of_tables_header`.
-    fn renderKeyPath(alloc: Allocator, parts: []const []const u8) ![]const u8 {
-        if (parts.len == 0) return "";
-        var total: usize = 0;
-        for (parts) |p| total += p.len;
-        total += parts.len - 1; // dots
-        var out = try alloc.alloc(u8, total);
-        var i: usize = 0;
-        for (parts, 0..) |p, idx| {
-            if (idx != 0) {
-                out[i] = '.';
-                i += 1;
-            }
-            @memcpy(out[i .. i + p.len], p);
-            i += p.len;
-        }
-        return out;
-    }
-
     fn mergeTables(alloc: Allocator, target: *Value, source: *Value) error{ ParseFailed, OutOfMemory }!void {
         // Both must be tables
         if (target.* != .table or source.* != .table) {
@@ -1187,46 +1148,6 @@ pub const Parser = struct {
 
     fn parseTimeLocal(self: *Parser, raw: []const u8) !val.TimeLocal {
         return datetime.parseTimeLocal(self, raw);
-    }
-
-    fn sinkEmitTableHeader(self: *Parser, rendered_path: []const u8, is_array_of_tables: bool) !void {
-        switch (self.sink) {
-            .document => {}, // document sink tracks tables via resolveTablePath
-            .events => |es| {
-                const ev: Event = if (is_array_of_tables)
-                    .{ .array_of_tables_header = rendered_path }
-                else
-                    .{ .table_header = rendered_path };
-                try es.handler.handle(ev);
-            },
-        }
-    }
-
-    fn sinkEmitKeyValueScalar(self: *Parser, rendered_key: []const u8, value: Value) !void {
-        switch (self.sink) {
-            .document => {}, // document sink writes via val.tableSet in caller
-            .events => |es| {
-                try es.handler.handle(.{ .key_value = .{ .key = rendered_key, .value = value } });
-            },
-        }
-    }
-
-    fn sinkEmitKeyValueContainer(self: *Parser, rendered_key: []const u8) !void {
-        switch (self.sink) {
-            .document => {},
-            .events => |es| {
-                try es.handler.handle(.{ .key_value = .{ .key = rendered_key, .value = null } });
-            },
-        }
-    }
-
-    fn sinkEmitSimple(self: *Parser, event: Event) !void {
-        switch (self.sink) {
-            .document => {},
-            .events => |es| {
-                try es.handler.handle(event);
-            },
-        }
     }
 
     pub fn nextToken(self: *Parser) !Token {
