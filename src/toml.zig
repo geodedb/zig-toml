@@ -879,6 +879,19 @@ test "Event and EventHandler are re-exported from root" {
     _ = HandlerType;
 }
 
+test "ParseOptions exposes recovery_mode and max_recovery_errors" {
+    const opts: ParseOptions = .{};
+    try std.testing.expectEqual(parser_mod.RecoveryMode.strict, opts.recovery_mode);
+    try std.testing.expectEqual(@as(usize, 100), opts.max_recovery_errors);
+
+    const custom: ParseOptions = .{
+        .recovery_mode = .recover,
+        .max_recovery_errors = 7,
+    };
+    try std.testing.expectEqual(parser_mod.RecoveryMode.recover, custom.recovery_mode);
+    try std.testing.expectEqual(@as(usize, 7), custom.max_recovery_errors);
+}
+
 test "parseEvents emits key_value events for simple pairs" {
     const Collector = struct {
         allocator: std.mem.Allocator,

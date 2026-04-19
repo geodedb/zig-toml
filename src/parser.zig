@@ -49,6 +49,22 @@ const ParseSink = union(enum) {
     };
 };
 
+/// Error-handling behaviour for `parse`/`parseWithError` vs. `parseRecover`.
+///
+/// - `.strict` (default): abort on the first parse error. Matches the
+///   historical behaviour of `parse` / `parseWithError`.
+/// - `.recover`: accumulate errors into a `RecoveryResult`, advance past
+///   each bad statement at the nearest safe boundary (newline, next
+///   `[`/`[[`, matching `}`/`]`), and keep going. Only `parseRecover`
+///   consults this field; `parse`/`parseWithError` always behave as
+///   `.strict`.
+pub const RecoveryMode = enum {
+    /// Abort on the first parse error (default).
+    strict,
+    /// Log each error, skip to the next safe point, and keep going.
+    recover,
+};
+
 pub const ParseOptions = struct {
     version: TomlVersion = .v1_1_0,
     max_depth: u16 = 128,
@@ -62,6 +78,15 @@ pub const ParseOptions = struct {
     /// Covers scalar values, arrays, tables, and array-of-tables nodes.
     /// Bumps are charged at every allocation site.
     max_values: usize = 500_000,
+    /// Parse strictly (default) or accumulate errors and produce a partial
+    /// document. Only consulted by `parseRecover`; strict-mode entrypoints
+    /// ignore this field.
+    recovery_mode: RecoveryMode = .strict,
+    /// Maximum number of errors to log in `recover` mode before giving up
+    /// and returning what we have so far. Prevents runaway errors on
+    /// pathological inputs. Only consulted when
+    /// `recovery_mode == .recover`.
+    max_recovery_errors: usize = 100,
 };
 
 pub const Parser = struct {
