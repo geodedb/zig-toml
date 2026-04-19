@@ -27,6 +27,10 @@ pub const parser_mod = @import("parser.zig");
 pub const TomlVersion = parser_mod.TomlVersion;
 pub const ParseOptions = parser_mod.ParseOptions;
 
+pub const events = @import("events.zig");
+pub const Event = events.Event;
+pub const EventHandler = events.EventHandler;
+
 pub const json_tagged = @import("json_tagged.zig");
 
 pub const encoder = @import("encoder.zig");
@@ -58,6 +62,7 @@ comptime {
     _ = encoder;
     _ = encoder_cli;
     _ = schema;
+    _ = events;
 }
 
 /// Parse TOML input into a Document.
@@ -852,4 +857,12 @@ test "parseStream propagates reader errors" {
 
     const result = parseStream(std.testing.allocator, &failing.interface, .{});
     try std.testing.expectError(error.ReadFailed, result);
+}
+
+test "Event and EventHandler are re-exported from root" {
+    const EventType = Event;
+    const HandlerType = EventHandler;
+    // Type reference is enough; the union tag count lives in events.zig.
+    _ = EventType;
+    _ = HandlerType;
 }

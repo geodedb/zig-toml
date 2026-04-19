@@ -32,6 +32,8 @@ const DateTimeLocal
 const Document
 const EncodeOptions
 const ErrorCode
+const Event
+const EventHandler
 const ParseError
 const ParseOptions
 const ArrayOpts
@@ -57,6 +59,7 @@ const decode
 const encoder
 const encoder_cli
 const error_mod
+const events
 const json_tagged
 const parallel
 const parser_mod
