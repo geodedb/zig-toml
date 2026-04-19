@@ -178,6 +178,49 @@ pub fn build(b: *std.Build) void {
     });
     const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
 
+    // S-15: sibling fuzz harnesses covering the public entry points
+    // that the default `parseWithError` harness never reaches
+    // (parseRecover / parseStream / parseEvents / parallel.parseDocuments).
+    const fuzz_recover_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fuzz_parse_recover.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "toml", .module = toml_mod }},
+        }),
+    });
+    const run_fuzz_recover_tests = b.addRunArtifact(fuzz_recover_tests);
+
+    const fuzz_stream_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fuzz_parse_stream.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "toml", .module = toml_mod }},
+        }),
+    });
+    const run_fuzz_stream_tests = b.addRunArtifact(fuzz_stream_tests);
+
+    const fuzz_events_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fuzz_parse_events.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "toml", .module = toml_mod }},
+        }),
+    });
+    const run_fuzz_events_tests = b.addRunArtifact(fuzz_events_tests);
+
+    const fuzz_parallel_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fuzz_parallel.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "toml", .module = toml_mod }},
+        }),
+    });
+    const run_fuzz_parallel_tests = b.addRunArtifact(fuzz_parallel_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_accept_tests.step);
@@ -186,6 +229,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_encoder_golden_tests.step);
     test_step.dependOn(&run_differential_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
+    test_step.dependOn(&run_fuzz_recover_tests.step);
+    test_step.dependOn(&run_fuzz_stream_tests.step);
+    test_step.dependOn(&run_fuzz_events_tests.step);
+    test_step.dependOn(&run_fuzz_parallel_tests.step);
     test_step.dependOn(&run_docs_hygiene.step);
 
     // Benchmark harness (opt-in; not part of `test`).
