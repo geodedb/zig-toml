@@ -199,76 +199,13 @@ fn recoverAdvancePastLine(parser: *Parser) void {
     // Guarantee forward progress: always consume the token that caused us
     // to enter recovery so we cannot loop on it. Lexer failures short-
     // circuit us straight to EOF.
-    parser.current = parser.nextToken() catch .{
-        .tag = .eof,
-        .start = 0,
-        .end = 0,
-        .pos = .{},
-    };
+    advanceOrEof(parser);
 
     var brace_depth: i32 = 0;
     var bracket_depth: i32 = 0;
 
     while (parser.current.tag != .eof) {
-        switch (parser.current.tag) {
-            .left_brace => brace_depth += 1,
-            .right_brace => {
-                if (brace_depth > 0) {
-                    brace_depth -= 1;
-                } else {
-                    // Unbalanced close: this is the closer of the inline
-                    // table we were inside when the error fired. Consume
-                    // it and treat it as a statement boundary.
-                    parser.current = parser.nextToken() catch .{
-                        .tag = .eof,
-                        .start = 0,
-                        .end = 0,
-                        .pos = .{},
-                    };
-                    return;
-                }
-            },
-            .left_bracket => bracket_depth += 1,
-            .right_bracket => {
-                if (bracket_depth > 0) {
-                    bracket_depth -= 1;
-                } else {
-                    parser.current = parser.nextToken() catch .{
-                        .tag = .eof,
-                        .start = 0,
-                        .end = 0,
-                        .pos = .{},
-                    };
-                    return;
-                }
-            },
-            .double_bracket_close => {
-                // `]]` unbalanced at depth 0: the recovery array had two
-                // trailing `]`. Treat as boundary; consume and return.
-                if (bracket_depth <= 1) {
-                    parser.current = parser.nextToken() catch .{
-                        .tag = .eof,
-                        .start = 0,
-                        .end = 0,
-                        .pos = .{},
-                    };
-                    return;
-                }
-                bracket_depth -= 2;
-            },
-            .newline => {
-                if (brace_depth == 0 and bracket_depth == 0) {
-                    parser.current = parser.nextToken() catch .{
-                        .tag = .eof,
-                        .start = 0,
-                        .end = 0,
-                        .pos = .{},
-                    };
-                    return;
-                }
-            },
-            else => {},
-        }
+        if (updateNestingOrReturn(parser, &brace_depth, &bracket_depth)) return;
 
         // A table header at depth zero is also a statement boundary even
         // without an intervening newline (defensive against missing `\n`).
@@ -279,11 +216,64 @@ fn recoverAdvancePastLine(parser: *Parser) void {
             }
         }
 
-        parser.current = parser.nextToken() catch .{
-            .tag = .eof,
-            .start = 0,
-            .end = 0,
-            .pos = .{},
-        };
+        advanceOrEof(parser);
     }
+}
+
+/// Consume one token into `parser.current`. A lexer error collapses to
+/// EOF so the recovery loop terminates cleanly.
+fn advanceOrEof(parser: *Parser) void {
+    parser.current = parser.nextToken() catch .{
+        .tag = .eof,
+        .start = 0,
+        .end = 0,
+        .pos = .{},
+    };
+}
+
+/// Adjust `brace_depth` / `bracket_depth` for `parser.current` and
+/// decide whether the recovery loop should stop here. Returns true when
+/// the caller should return (statement boundary reached); in that case
+/// the boundary token has already been consumed.
+fn updateNestingOrReturn(parser: *Parser, brace_depth: *i32, bracket_depth: *i32) bool {
+    switch (parser.current.tag) {
+        .left_brace => brace_depth.* += 1,
+        .right_brace => {
+            if (brace_depth.* > 0) {
+                brace_depth.* -= 1;
+            } else {
+                // Unbalanced close: this is the closer of the inline
+                // table we were inside when the error fired. Consume
+                // it and treat it as a statement boundary.
+                advanceOrEof(parser);
+                return true;
+            }
+        },
+        .left_bracket => bracket_depth.* += 1,
+        .right_bracket => {
+            if (bracket_depth.* > 0) {
+                bracket_depth.* -= 1;
+            } else {
+                advanceOrEof(parser);
+                return true;
+            }
+        },
+        .double_bracket_close => {
+            // `]]` unbalanced at depth <= 1: the recovery array had
+            // two trailing `]`. Treat as boundary; consume and return.
+            if (bracket_depth.* <= 1) {
+                advanceOrEof(parser);
+                return true;
+            }
+            bracket_depth.* -= 2;
+        },
+        .newline => {
+            if (brace_depth.* == 0 and bracket_depth.* == 0) {
+                advanceOrEof(parser);
+                return true;
+            }
+        },
+        else => {},
+    }
+    return false;
 }
