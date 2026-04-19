@@ -101,6 +101,33 @@ pub fn parseWithError(alloc: Allocator, input: []const u8, opts: ParseOptions) P
     return .{ .ok = doc };
 }
 
+/// Parse TOML from a streaming reader into a Document.
+///
+/// This is the streaming entry point that closes GAP-0016. Internally the
+/// reader is drained into a single `opts.max_bytes`-bounded buffer owned by
+/// `alloc`, then handed to `parse`. Behaviour, errors, and ownership of the
+/// returned Document are identical to `parse`; the only difference is where
+/// the bytes come from.
+///
+/// The Document owns all parsed data via an internal ArenaAllocator. Call
+/// `deinit()` on the returned Document to free all memory. The transient
+/// drain buffer is freed before this function returns.
+///
+/// Errors:
+/// - `error.ParseFailed` for TOML parse errors (same as `parse`).
+/// - `error.StreamTooLong` if the reader produces more than `opts.max_bytes`
+///   bytes before EOF.
+/// - Any error returned by the underlying reader is propagated unchanged.
+pub fn parseStream(
+    alloc: Allocator,
+    reader: *std.Io.Reader,
+    opts: ParseOptions,
+) !*Document {
+    const input = try reader.allocRemaining(alloc, .limited(opts.max_bytes));
+    defer alloc.free(input);
+    return parse(alloc, input, opts);
+}
+
 /// Write toml-test compatible tagged JSON.
 /// Keys are sorted lexicographically at every level for determinism.
 pub fn writeTaggedJson(doc: *const Document, writer: anytype) !void {
@@ -746,4 +773,35 @@ test "float with many underscore separators parses" {
     defer doc.deinit();
     const f = doc.root.get("f") orelse unreachable;
     try std.testing.expect(f.float > 0.0);
+}
+
+test "parseStream equivalence with parse for small input" {
+    const input =
+        \\title = "My Application"
+        \\
+        \\[server]
+        \\host = "localhost"
+        \\port = 8080
+    ;
+
+    // Baseline: parse from a slice.
+    const base = try parse(std.testing.allocator, input, .{});
+    defer base.deinit();
+
+    // Under test: parseStream from an in-memory reader over the same bytes.
+    var fixed: std.Io.Reader = .fixed(input);
+    const streamed = try parseStream(std.testing.allocator, &fixed, .{});
+    defer streamed.deinit();
+
+    // Compare via tagged JSON -- deterministic (keys sorted) and already
+    // exercised across the codebase, so any divergence is obvious.
+    var base_aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer base_aw.deinit();
+    try writeTaggedJson(base, &base_aw.writer);
+
+    var streamed_aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer streamed_aw.deinit();
+    try writeTaggedJson(streamed, &streamed_aw.writer);
+
+    try std.testing.expectEqualStrings(base_aw.written(), streamed_aw.written());
 }

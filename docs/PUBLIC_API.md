@@ -64,6 +64,7 @@ const schema
 const value_mod
 fn encode
 fn parse
+fn parseStream
 fn parseWithError
 fn writeTaggedJson
 ```
