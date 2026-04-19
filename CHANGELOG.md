@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SAX-style event parser API (`toml.parseEvents`, `toml.Event`,
+  `toml.EventHandler`). Closes GAP-0017. Shares the recursive-descent
+  walker with `toml.parse` via a private `ParseSink` abstraction so the
+  two APIs cannot drift apart. See `docs/API.md` (Event API) and
+  `examples/sax_parser.zig`.
 - `toml.parseStream(alloc, reader, opts)` -- parse a TOML document from
   any `std.Io.Reader` (file, socket, pipe). Implemented as a buffering
   wrapper over `parse` that drains the reader into an

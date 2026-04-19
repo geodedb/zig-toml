@@ -288,6 +288,26 @@ BurntSushi/toml-test encoder harness driven by the
 `toml-test-conformance` GitLab CI stage (allow_failure, tracked under
 GAP-0004 for eventual required-gate flip).
 
+### 9. Event Types (events.zig)
+
+Public surface for the SAX-style parser (`toml.parseEvents`).
+Introduces two types:
+
+- `Event` is a tagged union with eight variants -- `table_header`,
+  `array_of_tables_header`, `key_value`, `inline_table_start` /
+  `inline_table_end`, `array_start` / `array_end`, and `array_item`.
+- `EventHandler` is a trait-struct (`ctx: *anyopaque`,
+  `handleFn: *const fn(ctx, Event) anyerror!void`) that mirrors the
+  `std.mem.Allocator` pattern: the caller owns the context pointer
+  and the callback receives the same pointer back.
+
+The file deliberately has no dependency on `parser.zig` to keep the
+type surface cycle-free; the parser imports `events.zig` one way.
+Internally, `parser.zig` carries a private `ParseSink` tagged union
+(`.document` | `.events`) so the recursive-descent walker drives
+either the arena-based Document build or the event stream without
+duplicating the grammar.
+
 ## Memory Management
 
 ### Arena Allocator Strategy
@@ -510,6 +530,8 @@ src/
 ├── json_tagged.zig    # Tagged JSON emitter
 ├── encoder.zig        # TOML encoder: encode(), EncodeOptions
 ├── encoder_cli.zig    # CLI glue: jsonToValue, runEncodePipeline
+├── events.zig         # Event union + EventHandler trait-struct
+│                      # (public surface of parseEvents)
 ├── parallel.zig       # ParallelContext: fan-out parse/validate/extract
 └── bin/
     ├── toml_test_decoder.zig  # CLI for toml-test (parse -> tagged JSON)

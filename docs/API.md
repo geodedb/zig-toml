@@ -186,6 +186,85 @@ pub fn main(init: std.process.Init) !void {
 
 ---
 
+### parseEvents
+
+```zig
+pub fn parseEvents(
+    alloc: Allocator,
+    input: []const u8,
+    handler: EventHandler,
+    opts: ParseOptions,
+) !void
+```
+
+**Description:** Parse TOML with SAX-style event emission. No
+`Document` is built; the supplied `handler` is invoked for every
+event in document order. This is useful for:
+
+- counting or filtering keys without paying the arena cost of a tree,
+- streaming large configs to a downstream consumer,
+- validation-only passes.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `alloc` | `Allocator` | Working allocator (backs a short-lived arena freed before return). |
+| `input` | `[]const u8` | TOML source text (must be valid UTF-8). |
+| `handler` | `EventHandler` | Trait-struct with `ctx: *anyopaque` and `handleFn: *const fn(ctx, Event) anyerror!void`. |
+| `opts` | `ParseOptions` | Same options struct as `parse`. |
+
+**Events:** `Event` is a tagged union with the following variants:
+
+| Variant | Payload | Emitted when |
+|---------|---------|--------------|
+| `table_header` | `[]const u8` | `[section]` header encountered; payload is the dotted path rendered as `"a.b.c"`. |
+| `array_of_tables_header` | `[]const u8` | `[[items]]` header encountered. |
+| `key_value` | `KeyValue { key: []const u8, value: ?Value }` | Key=value pair. For scalar values `value` is set; for container values (inline table, array) `value` is null and the corresponding `inline_table_start` / `array_start` event fires immediately after. |
+| `inline_table_start` / `inline_table_end` | -- | Wrap `{ ... }`. |
+| `array_start` / `array_end` | -- | Wrap `[ ... ]`. |
+| `array_item` | `Value` | A scalar element of an array. Container elements (nested arrays, inline tables) emit their own start/end pairs instead. |
+
+**Slice lifetime:** All `[]const u8` slices inside an `Event` point at
+parser-owned storage and are only valid for the duration of the
+`handleFn` call. Copy them (e.g. `allocator.dupe(u8, ...)`) if you
+need them longer. The same rule applies to string payloads inside a
+`Value`.
+
+**Errors:**
+
+| Error | Description |
+|-------|-------------|
+| `error.ParseFailed` | TOML parse error (UTF-8, syntax, size limits, resource caps). |
+| `error.OutOfMemory` | Working allocator exhausted. |
+| *any anyerror the handler returns* | Propagated verbatim. |
+
+**Example:**
+
+```zig
+const Counter = struct {
+    keys: usize = 0,
+    fn handle(ctx: *anyopaque, ev: toml.Event) anyerror!void {
+        const self: *Counter = @ptrCast(@alignCast(ctx));
+        if (ev == .key_value) self.keys += 1;
+    }
+};
+
+var c: Counter = .{};
+try toml.parseEvents(
+    allocator,
+    input,
+    .{ .ctx = &c, .handleFn = Counter.handle },
+    .{},
+);
+std.debug.print("saw {d} keys\n", .{c.keys});
+```
+
+See `examples/sax_parser.zig` for a full handler that counts keys,
+tables, array-of-tables, inline tables, and arrays.
+
+---
+
 ### writeTaggedJson
 
 ```zig
