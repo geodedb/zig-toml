@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `toml.parseRecover` entry point plus `RecoveryResult` and
+  `RecoveryMode` public types for partial-parse / error-recovery
+  workflows (e.g. IDE integrations, linters, CI gates). Logs every
+  syntax error instead of aborting on the first one, and returns a
+  (possibly partial) `*Document` containing everything that parsed
+  cleanly. Configurable via `ParseOptions.recovery_mode` and
+  `ParseOptions.max_recovery_errors` (default 100). `InvalidUtf8` and
+  `max_bytes` violations are terminal and short-circuit to an empty
+  document. Closes GAP-0020. See `docs/API.md` (Error recovery) and
+  `examples/lint_toml.zig`.
 - SAX-style event parser API (`toml.parseEvents`, `toml.Event`,
   `toml.EventHandler`). Closes GAP-0017. Shares the recursive-descent
   walker with `toml.parse` via a private `ParseSink` abstraction so the

@@ -1073,4 +1073,80 @@ exercises both styles.
 
 ---
 
+## Error recovery
+
+Use `toml.parseRecover` when you want every syntax error in a file
+rather than just the first one. Typical users: editors, IDE
+integrations, linters, and CI gates that must surface all diagnostics
+in a single pass.
+
+```zig
+const toml = @import("toml");
+
+var result = try toml.parseRecover(allocator, input, .{
+    .recovery_mode = .recover,
+    .max_recovery_errors = 100, // default
+});
+defer result.deinit(allocator);
+
+for (result.errors) |e| {
+    std.debug.print("line {d}, col {d}: [{s}] {s}\n", .{
+        e.line, e.column, @tagName(e.code), e.message,
+    });
+}
+
+// `result.document` is a valid, possibly partial *Document that
+// contains every key/table that parsed cleanly. All lookups work
+// normally.
+const maybe_host = result.document.getPath(&.{ "server", "host" });
+```
+
+`RecoveryResult` owns the document arena plus the error slice:
+
+```zig
+pub const RecoveryResult = struct {
+    document: *Document,
+    errors: []ParseError,
+    pub fn deinit(self: *RecoveryResult, alloc: Allocator) void { ... }
+};
+```
+
+`RecoveryMode` is a simple enum:
+
+```zig
+pub const RecoveryMode = enum { strict, recover };
+```
+
+`.strict` is the default on `ParseOptions` and matches historical
+behaviour. `.recover` is enabled by calling `parseRecover` (which
+forces it internally regardless of what the caller passed in
+`opts.recovery_mode`).
+
+When a syntax error fires, the recovery loop advances past it to the
+next safe synchronisation point:
+
+- **Newlines** at depth zero terminate a statement.
+- **`[` / `[[`** at depth zero starts a new table header (and is a
+  boundary even without an intervening newline, as a defence against
+  missing `\n`).
+- **Matching `}`** closes a broken inline table so subsequent lines
+  are not consumed.
+- **Matching `]`** closes a broken array so subsequent lines are not
+  consumed.
+
+Recovery is bounded by `opts.max_recovery_errors` (default `100`):
+once that many errors have been logged, `parseRecover` stops trying
+and returns what it has so far.
+
+Non-recoverable errors short-circuit to an empty document plus a
+single error:
+
+- `InvalidUtf8` -- we cannot trust the bytes, so recovery is
+  meaningless.
+- `max_bytes` exceeded -- input is over the configured size cap.
+
+See `examples/lint_toml.zig` for a CLI-style end-to-end program.
+
+---
+
 API Reference for zigtoml TOML Parser.
