@@ -33,36 +33,36 @@
 | String | Multiline basic (`"""…"""`) | required | required | Yes | toml.zig "multiline basic string" |
 | String | Literal (`'…'`) | required | required | Yes | accept.zig |
 | String | Multiline literal (`'''…'''`) | required | required | Yes | toml.zig "multiline literal string" |
-| String | Escape `\b \t \n \f \r \" \\` | required | required | Yes | `parser.zig::decodeEscapeChar` |
-| String | Escape `\e` (ESC) | No | required | Yes (v1.1) | `parser.zig::decodeEscapeChar` |
-| String | Escape `\x` (1-byte hex) | No | required | Yes (v1.1) | `parser.zig::decodeEscapeChar` |
-| String | Escape `\uXXXX`, `\UXXXXXXXX` | required | required | Yes | `parser.zig::decodeEscapeChar` |
+| String | Escape `\b \t \n \f \r \" \\` | required | required | Yes | `parser/string.zig::decodeEscapeChar` |
+| String | Escape `\e` (ESC) | No | required | Yes (v1.1) | `parser/string.zig::decodeEscapeChar` |
+| String | Escape `\x` (1-byte hex) | No | required | Yes (v1.1) | `parser/string.zig::decodeEscapeChar` |
+| String | Escape `\uXXXX`, `\UXXXXXXXX` | required | required | Yes | `parser/string.zig::decodeEscapeChar` |
 | String | UTF-8 validation | required | required | Yes | `toml.zig::parse`, toml.zig "invalid UTF-8 rejected" |
-| String | Line-ending backslash | required | required | Yes | `parser.zig::decodeMultilineEscapes` |
+| String | Line-ending backslash | required | required | Yes | `parser/string.zig::decodeMultilineEscapes` |
 | Integer | Decimal | required | required | Yes | toml.zig "parse simple key-value" |
 | Integer | Hex (`0xDEADBEEF`) | required | required | Yes | toml.zig "hex integer" |
 | Integer | Octal (`0o755`) | required | required | Yes | toml.zig "octal integer" |
 | Integer | Binary (`0b…`) | required | required | Yes | toml.zig "binary integer" |
-| Integer | Underscore separators | required | required | Yes | `parser.zig::parseInteger` |
+| Integer | Underscore separators | required | required | Yes | `parser/number.zig::parseInteger` |
 | Float | Standard | required | required | Yes | toml.zig "parse float" |
 | Float | `inf`, `-inf`, `nan` | required | required | Yes | toml.zig "special floats" |
-| Float | Underscore separators | required | required | Yes | `parser.zig::parseFloat` |
+| Float | Underscore separators | required | required | Yes | `parser/number.zig::parseFloat` |
 | Boolean | `true` / `false` | required | required | Yes | toml.zig "parse bool" |
 | DateTime | Offset (`Z`, `+HH:MM`) | required | required | Yes | toml.zig "parse date-time" |
-| DateTime | Local (`YYYY-MM-DDTHH:MM:SS`) | required | required | Yes | `parser.zig::parseDateTimeLocal` |
+| DateTime | Local (`YYYY-MM-DDTHH:MM:SS`) | required | required | Yes | `parser/datetime.zig::parseDateTimeLocal` |
 | DateTime | Fractional seconds | required | required | Yes | toml.zig "U-R malformed fractional seconds rejected" (negative test) |
 | DateTime | Malformed tz offset rejected | required | required | Yes (S-7 closed) | toml.zig "U-R malformed timezone hours rejected" |
-| Date (local) | `YYYY-MM-DD` | required | required | Yes | `parser.zig::parseDateLocal` |
+| Date (local) | `YYYY-MM-DD` | required | required | Yes | `parser/datetime.zig::parseDateLocal` |
 | Time (local) | `HH:MM:SS` | required | required | Yes | toml.zig "parse local time" |
-| Time (local) | Seconds omitted (`HH:MM`) | No (rejected) | required | Yes | `parser.zig::parseTimeLocal` version-gated |
+| Time (local) | Seconds omitted (`HH:MM`) | No (rejected) | required | Yes | `parser/datetime.zig::parseTimeLocal` version-gated |
 | Array | Homogeneous/heterogeneous | required | required | Yes | toml.zig "parse array" |
-| Array | Trailing comma | required | required | Yes | `parser.zig::parseArray` |
+| Array | Trailing comma | required | required | Yes | `parser/array.zig::parseArray` |
 | Array | Nested depth guard | required | required | Yes (S-6 closed) | toml.zig "U-H deep nesting rejected by defense-in-depth guards" |
 | Table | `[header]` | required | required | Yes | toml.zig "parse table" |
 | Table | Inline `{…}` | required | required | Yes | toml.zig "parse inline table" |
 | Table | Inline newlines allowed | rejected | required | Yes | version-gated in `parseInlineTable` |
 | Table | Inline trailing comma allowed | rejected | required | Yes | version-gated in `parseInlineTable` |
-| Table | Redefinition rejected | required | required | Yes | `parser.zig::resolveTablePath` |
+| Table | Redefinition rejected | required | required | Yes | `parser/table_path.zig::resolveTablePath` |
 | Array of tables | `[[array]]` | required | required | Yes | toml.zig "parse array of tables" |
 | Limits | `max_depth` | optional | optional | Yes | `ParseOptions.max_depth`, toml.zig "U-H" tests |
 | Limits | `max_bytes` | optional | optional | Yes | `ParseOptions.max_bytes`, `parser.zig::parse` |
