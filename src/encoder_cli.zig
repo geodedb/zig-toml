@@ -93,13 +93,13 @@ fn decodeTaggedLeaf(alloc: std.mem.Allocator, tag: []const u8, literal: []const 
     } else if (std.mem.eql(u8, tag, "bool")) {
         v.* = .{ .bool = std.mem.eql(u8, literal, "true") };
     } else if (std.mem.eql(u8, tag, "datetime")) {
-        v.* = .{ .datetime = try parseDateTime(literal) };
+        v.* = .{ .datetime = try parseDatetimeLiteral(.datetime, literal) };
     } else if (std.mem.eql(u8, tag, "datetime-local")) {
-        v.* = .{ .datetime_local = try parseDateTimeLocal(literal) };
+        v.* = .{ .datetime_local = try parseDatetimeLiteral(.datetime_local, literal) };
     } else if (std.mem.eql(u8, tag, "date-local")) {
-        v.* = .{ .date_local = try parseDateLocal(literal) };
+        v.* = .{ .date_local = try parseDatetimeLiteral(.date_local, literal) };
     } else if (std.mem.eql(u8, tag, "time-local")) {
-        v.* = .{ .time_local = try parseTimeLocal(literal) };
+        v.* = .{ .time_local = try parseDatetimeLiteral(.time_local, literal) };
     } else {
         return error.UnknownTag;
     }
@@ -118,56 +118,18 @@ fn parseFloatLiteral(s: []const u8) !f64 {
 // Datetime literals are re-parsed through the real TOML parser by
 // wrapping them as `x = <lit>` so we inherit the lexer's validation
 // rules instead of maintaining a second datetime grammar here.
-fn parseDateTime(s: []const u8) !DateTime {
+fn parseDatetimeLiteral(
+    comptime tag: std.meta.Tag(Value),
+    s: []const u8,
+) !@FieldType(Value, @tagName(tag)) {
     var buf: [128]u8 = undefined;
     const wrapped = try std.fmt.bufPrint(&buf, "x = {s}\n", .{s});
     var p = parser_mod.Parser.init(std.heap.smp_allocator, wrapped, .{});
     const doc = try p.parse();
     defer doc.deinit();
     const v = doc.root.get("x") orelse return error.InvalidDateTime;
-    return switch (v.*) {
-        .datetime => |dt| dt,
-        else => error.InvalidDateTime,
-    };
-}
-
-fn parseDateTimeLocal(s: []const u8) !DateTimeLocal {
-    var buf: [128]u8 = undefined;
-    const wrapped = try std.fmt.bufPrint(&buf, "x = {s}\n", .{s});
-    var p = parser_mod.Parser.init(std.heap.smp_allocator, wrapped, .{});
-    const doc = try p.parse();
-    defer doc.deinit();
-    const v = doc.root.get("x") orelse return error.InvalidDateTime;
-    return switch (v.*) {
-        .datetime_local => |dt| dt,
-        else => error.InvalidDateTime,
-    };
-}
-
-fn parseDateLocal(s: []const u8) !DateLocal {
-    var buf: [128]u8 = undefined;
-    const wrapped = try std.fmt.bufPrint(&buf, "x = {s}\n", .{s});
-    var p = parser_mod.Parser.init(std.heap.smp_allocator, wrapped, .{});
-    const doc = try p.parse();
-    defer doc.deinit();
-    const v = doc.root.get("x") orelse return error.InvalidDateTime;
-    return switch (v.*) {
-        .date_local => |d| d,
-        else => error.InvalidDateTime,
-    };
-}
-
-fn parseTimeLocal(s: []const u8) !TimeLocal {
-    var buf: [128]u8 = undefined;
-    const wrapped = try std.fmt.bufPrint(&buf, "x = {s}\n", .{s});
-    var p = parser_mod.Parser.init(std.heap.smp_allocator, wrapped, .{});
-    const doc = try p.parse();
-    defer doc.deinit();
-    const v = doc.root.get("x") orelse return error.InvalidDateTime;
-    return switch (v.*) {
-        .time_local => |t| t,
-        else => error.InvalidDateTime,
-    };
+    if (v.* != tag) return error.InvalidDateTime;
+    return @field(v, @tagName(tag));
 }
 
 /// Parse tagged-JSON `input`, reconstruct a Document, and encode it as
