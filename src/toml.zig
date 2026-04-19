@@ -89,6 +89,18 @@ pub const ParseResult = union(enum) {
     err: ParseError,
 };
 
+/// Event-driven TOML parser. No `Document` is materialized; the supplied
+/// `handler` is invoked for every SAX-style event in document order.
+/// See `docs/API.md` (Event API section) and `examples/sax_parser.zig`.
+pub fn parseEvents(
+    alloc: Allocator,
+    input: []const u8,
+    handler: EventHandler,
+    opts: ParseOptions,
+) !void {
+    return parser_mod.parseEvents(alloc, input, handler, opts);
+}
+
 pub fn parseWithError(alloc: Allocator, input: []const u8, opts: ParseOptions) ParseResult {
     var parser = parser_mod.Parser.init(alloc, input, opts);
     const doc = parser.parse() catch {
@@ -865,4 +877,58 @@ test "Event and EventHandler are re-exported from root" {
     // Type reference is enough; the union tag count lives in events.zig.
     _ = EventType;
     _ = HandlerType;
+}
+
+test "parseEvents emits key_value events for simple pairs" {
+    const Collector = struct {
+        allocator: std.mem.Allocator,
+        keys: std.ArrayList([]const u8),
+        ints: std.ArrayList(i64),
+
+        fn init(a: std.mem.Allocator) @This() {
+            return .{
+                .allocator = a,
+                .keys = .empty,
+                .ints = .empty,
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            for (self.keys.items) |k| self.allocator.free(k);
+            self.keys.deinit(self.allocator);
+            self.ints.deinit(self.allocator);
+        }
+
+        fn handle(ctx: *anyopaque, event: Event) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            switch (event) {
+                .key_value => |kv| {
+                    if (kv.value) |v| switch (v) {
+                        .integer => |n| {
+                            try self.keys.append(self.allocator, try self.allocator.dupe(u8, kv.key));
+                            try self.ints.append(self.allocator, n);
+                        },
+                        else => {},
+                    };
+                },
+                else => {},
+            }
+        }
+    };
+
+    var collector = Collector.init(std.testing.allocator);
+    defer collector.deinit();
+
+    const handler = EventHandler{
+        .ctx = &collector,
+        .handleFn = Collector.handle,
+    };
+
+    try parseEvents(std.testing.allocator, "a = 1\nb = 2\n", handler, .{});
+
+    try std.testing.expectEqual(@as(usize, 2), collector.keys.items.len);
+    try std.testing.expectEqualStrings("a", collector.keys.items[0]);
+    try std.testing.expectEqualStrings("b", collector.keys.items[1]);
+    try std.testing.expectEqual(@as(i64, 1), collector.ints.items[0]);
+    try std.testing.expectEqual(@as(i64, 2), collector.ints.items[1]);
 }

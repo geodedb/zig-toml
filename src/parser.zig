@@ -23,6 +23,32 @@ const TableEntry = val.TableEntry;
 
 pub const TomlVersion = lex.TomlVersion;
 
+const events_mod = @import("events.zig");
+pub const Event = events_mod.Event;
+pub const EventHandler = events_mod.EventHandler;
+
+/// Output sink for the shared recursive-descent walker. `parse` uses
+/// `.document` (write into an arena-backed Value tree). `parseEvents`
+/// uses `.events` (dispatch Event values to the caller).
+///
+/// Every sink method takes borrowed slices -- the caller must copy
+/// anything it needs past the call. For the document sink the parser
+/// already dupes into the arena; for the event sink the user is told
+/// in the Event docstring that slices only live for the handleFn call.
+const ParseSink = union(enum) {
+    document: DocSink,
+    events: EventSink,
+
+    const DocSink = struct {
+        alloc: Allocator,
+        root: *Value,
+    };
+
+    const EventSink = struct {
+        handler: EventHandler,
+    };
+};
+
 pub const ParseOptions = struct {
     version: TomlVersion = .v1_1_0,
     max_depth: u16 = 128,
@@ -54,6 +80,10 @@ pub const Parser = struct {
     /// createTable/createArray/alloc.create(Value) call site; checked
     /// against options.max_values.
     values_allocated: usize,
+    /// Output sink. `parse` installs `.document`; `parseEvents` installs
+    /// `.events`. The walker dispatches to sink helpers (`sinkEmit*`) at
+    /// every construct boundary so both modes share a single walk.
+    sink: ParseSink,
 
     pub fn init(alloc: Allocator, input: []const u8, options: ParseOptions) Parser {
         return .{
@@ -67,6 +97,9 @@ pub const Parser = struct {
             .input = input,
             .keys_allocated = 0,
             .values_allocated = 0,
+            // Placeholder; the real value is set at the top of parse()
+            // or parseEvents() where the actual sink is known.
+            .sink = .{ .document = .{ .alloc = alloc, .root = undefined } },
         };
     }
 
@@ -115,6 +148,9 @@ pub const Parser = struct {
         const owned_input = try arena_alloc.dupe(u8, self.input);
         self.input = owned_input;
         self.lexer = Lexer.init(owned_input, self.options.version);
+
+        // Install the document sink for this run.
+        self.sink = .{ .document = .{ .alloc = arena_alloc, .root = doc.root } };
 
         // Prime the parser
         self.current = try self.nextToken();
@@ -190,6 +226,16 @@ pub const Parser = struct {
 
         // Skip trailing whitespace/newline/comment
         try self.skipToNewline();
+
+        // Render the dotted path as a single slice for the event. The
+        // slice lives in `alloc` (document arena for document mode,
+        // throwaway arena for events mode) -- either way it outlasts
+        // the handleFn call because events are emitted synchronously
+        // from within this walk.
+        if (self.sink == .events) {
+            const rendered = try renderKeyPath(alloc, path.items);
+            try self.sinkEmitTableHeader(rendered, is_array_of_tables);
+        }
 
         // Navigate/create the table path
         return self.resolveTablePath(alloc, root, path.items, is_array_of_tables, start_pos);
@@ -333,6 +379,21 @@ pub const Parser = struct {
         }
         self.current = try self.nextToken();
 
+        // In events mode, announce the key BEFORE descending into a
+        // container value so handlers see `key_value` -> `array_start` /
+        // `inline_table_start`, matching natural reading order. Scalar
+        // values are still announced AFTER parsing (when the decoded
+        // Value payload is available).
+        const value_is_container = switch (self.current.tag) {
+            .left_bracket, .double_bracket_open, .left_brace => true,
+            else => false,
+        };
+        if (self.sink == .events and value_is_container) {
+            // Use the final key for the event; for dotted keys this is
+            // the leaf segment the container is bound to.
+            try self.sinkEmitKeyValueContainer(path.items[path.items.len - 1]);
+        }
+
         // Parse value
         const value = try self.parseValue(alloc);
 
@@ -365,13 +426,27 @@ pub const Parser = struct {
             }
         }
 
-        // Set the final key
+        // Set the final key.
         const final_key = path.items[path.items.len - 1];
-        if (val.tableContains(target, final_key)) {
-            self.parse_error = err.makeError(.DuplicateKey, key_pos, "duplicate key");
-            return error.ParseFailed;
+        switch (self.sink) {
+            .document => {
+                if (val.tableContains(target, final_key)) {
+                    self.parse_error = err.makeError(.DuplicateKey, key_pos, "duplicate key");
+                    return error.ParseFailed;
+                }
+                try val.tableSet(alloc, target, final_key, value);
+            },
+            .events => {
+                // Events mode: scalar key_value fires AFTER value is
+                // decoded. Container key_value has already been emitted
+                // ahead of parseValue (see `value_is_container` branch
+                // above) so its `[`/`{` start event immediately follows
+                // the key in the event stream.
+                if (!value_is_container) {
+                    try self.sinkEmitKeyValueScalar(final_key, value.*);
+                }
+            },
         }
-        try val.tableSet(alloc, target, final_key, value);
 
         // Skip to next line
         try self.skipToNewline();
@@ -438,7 +513,13 @@ pub const Parser = struct {
         return key;
     }
 
-    const ParseValueError = error{ ParseFailed, OutOfMemory };
+    /// Errors that can flow out of the value-parsing recursion. Includes
+    /// the two intrinsic parser errors plus `anyerror` to accommodate
+    /// arbitrary errors returned by a user-supplied `EventHandler` when
+    /// the parser runs in events mode (GAP-0017). For the document sink
+    /// the set still collapses back to `error{ParseFailed, OutOfMemory}`
+    /// because the sink helpers do nothing in document mode.
+    const ParseValueError = anyerror;
 
     /// Increment the recursion depth counter and bail if the configured
     /// max_depth is exceeded. Every recursive descent entrypoint
@@ -553,12 +634,24 @@ pub const Parser = struct {
         var items: std.ArrayListUnmanaged(Value) = .empty;
         try items.ensureTotalCapacity(alloc, 16);
 
+        // For event-mode, announce array start before consuming any items.
+        try self.sinkEmitSimple(.array_start);
+
         // Skip whitespace and newlines
         try self.skipArrayWhitespace();
 
         while (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close and self.current.tag != .eof) {
             const item = try self.parseValue(alloc);
             try items.append(alloc, item.*);
+            // For scalar items, also emit array_item. Container items
+            // (tables / nested arrays) have already fired their own
+            // start/end events from inside parseValue -> parseInlineTable
+            // / parseArray; we do NOT want to wrap them in an
+            // `array_item`.
+            switch (item.*) {
+                .table, .array => {},
+                else => try self.sinkEmitSimple(.{ .array_item = item.* }),
+            }
 
             try self.skipArrayWhitespace();
 
@@ -591,6 +684,8 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
+        try self.sinkEmitSimple(.array_end);
+
         return Value{ .array = .{ .items = items, .is_static = true } };
     }
 
@@ -608,6 +703,11 @@ pub const Parser = struct {
         // was only needed when the slot type was *Value.
         var outer_items: std.ArrayListUnmanaged(Value) = .empty;
         try outer_items.ensureTotalCapacity(alloc, 16);
+
+        // Event-mode: announce the outer array start. The inner array's
+        // own start/end fires from parseArrayContents below, so the
+        // consumer observes `[, [, ..., ], ... , ]`.
+        try self.sinkEmitSimple(.array_start);
 
         // Parse the inner array (we're already "inside" it after consuming [[)
         try self.bumpValues();
@@ -631,6 +731,11 @@ pub const Parser = struct {
 
             const item = try self.parseValue(alloc);
             try outer_items.append(alloc, item.*);
+            // Same scalar-vs-container distinction as parseArray.
+            switch (item.*) {
+                .table, .array => {},
+                else => try self.sinkEmitSimple(.{ .array_item = item.* }),
+            }
             try self.skipArrayWhitespace();
         }
 
@@ -654,6 +759,8 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
+        try self.sinkEmitSimple(.array_end);
+
         return Value{ .array = .{ .items = outer_items, .is_static = true } };
     }
 
@@ -668,11 +775,20 @@ pub const Parser = struct {
         var items: std.ArrayListUnmanaged(Value) = .empty;
         try items.ensureTotalCapacity(alloc, 16);
 
+        // Event-mode: announce this inner array. Called from
+        // parseNestedArrayFromDoubleBracket which has already emitted
+        // its own outer `.array_start`.
+        try self.sinkEmitSimple(.array_start);
+
         try self.skipArrayWhitespace();
 
         while (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close and self.current.tag != .eof) {
             const item = try self.parseValue(alloc);
             try items.append(alloc, item.*);
+            switch (item.*) {
+                .table, .array => {},
+                else => try self.sinkEmitSimple(.{ .array_item = item.* }),
+            }
 
             try self.skipArrayWhitespace();
 
@@ -705,6 +821,8 @@ pub const Parser = struct {
             return error.ParseFailed;
         }
 
+        try self.sinkEmitSimple(.array_end);
+
         return Value{ .array = .{ .items = items, .is_static = true } };
     }
 
@@ -727,6 +845,11 @@ pub const Parser = struct {
         var header = try self.parseInlineTableHeader(alloc);
         errdefer header.map.deinit(alloc);
 
+        // Event-mode: announce the inline table after the `{` has been
+        // consumed (inside parseInlineTableHeader) and before the body
+        // keys are parsed so the handler sees `{`, kv:..., kv:..., `}`.
+        try self.sinkEmitSimple(.inline_table_start);
+
         // Capture the first offending token position for v1.0 restriction
         // diagnostics so error carets point at the violating `,` / newline
         // rather than at the opening `{` of the inline table.
@@ -734,6 +857,8 @@ pub const Parser = struct {
         var newline_inside_pos: ?Position = null;
         try self.parseInlineTableBody(alloc, &header, &trailing_comma_pos, &newline_inside_pos);
         try self.validateInlineTableV10Restrictions(&header, trailing_comma_pos, newline_inside_pos);
+
+        try self.sinkEmitSimple(.inline_table_end);
 
         return Value{ .table = .{ .map = header.map, .is_inline = true, .is_closed_inline = true } };
     }
@@ -781,7 +906,22 @@ pub const Parser = struct {
             }
             self.current = try self.nextToken();
 
+            // Events mode: pre-announce container key_values so handlers
+            // see `kv:key -> container_start`. Scalar key_values fire
+            // after the value is decoded, below.
+            const body_value_is_container = switch (self.current.tag) {
+                .left_bracket, .double_bracket_open, .left_brace => true,
+                else => false,
+            };
+            if (self.sink == .events and body_value_is_container) {
+                try self.sinkEmitKeyValueContainer(path.items[path.items.len - 1]);
+            }
+
             const value = try self.parseValue(alloc);
+
+            if (self.sink == .events and !body_value_is_container) {
+                try self.sinkEmitKeyValueScalar(path.items[path.items.len - 1], value.*);
+            }
 
             // Handle dotted keys in inline table
             if (path.items.len > 1) {
@@ -895,6 +1035,29 @@ pub const Parser = struct {
         }
     }
 
+    /// Join dotted-key path segments into a single `a.b.c` slice. The
+    /// returned slice is allocated from `alloc` and is therefore stable
+    /// for as long as that allocator survives (document arena for
+    /// `parse`, throwaway arena for `parseEvents`). Used to render the
+    /// slice carried by `.table_header` / `.array_of_tables_header`.
+    fn renderKeyPath(alloc: Allocator, parts: []const []const u8) ![]const u8 {
+        if (parts.len == 0) return "";
+        var total: usize = 0;
+        for (parts) |p| total += p.len;
+        total += parts.len - 1; // dots
+        var out = try alloc.alloc(u8, total);
+        var i: usize = 0;
+        for (parts, 0..) |p, idx| {
+            if (idx != 0) {
+                out[i] = '.';
+                i += 1;
+            }
+            @memcpy(out[i .. i + p.len], p);
+            i += p.len;
+        }
+        return out;
+    }
+
     fn mergeTables(alloc: Allocator, target: *Value, source: *Value) error{ ParseFailed, OutOfMemory }!void {
         // Both must be tables
         if (target.* != .table or source.* != .table) {
@@ -1000,6 +1163,46 @@ pub const Parser = struct {
         return datetime.parseTimeLocal(self, raw);
     }
 
+    fn sinkEmitTableHeader(self: *Parser, rendered_path: []const u8, is_array_of_tables: bool) !void {
+        switch (self.sink) {
+            .document => {}, // document sink tracks tables via resolveTablePath
+            .events => |es| {
+                const ev: Event = if (is_array_of_tables)
+                    .{ .array_of_tables_header = rendered_path }
+                else
+                    .{ .table_header = rendered_path };
+                try es.handler.handle(ev);
+            },
+        }
+    }
+
+    fn sinkEmitKeyValueScalar(self: *Parser, rendered_key: []const u8, value: Value) !void {
+        switch (self.sink) {
+            .document => {}, // document sink writes via val.tableSet in caller
+            .events => |es| {
+                try es.handler.handle(.{ .key_value = .{ .key = rendered_key, .value = value } });
+            },
+        }
+    }
+
+    fn sinkEmitKeyValueContainer(self: *Parser, rendered_key: []const u8) !void {
+        switch (self.sink) {
+            .document => {},
+            .events => |es| {
+                try es.handler.handle(.{ .key_value = .{ .key = rendered_key, .value = null } });
+            },
+        }
+    }
+
+    fn sinkEmitSimple(self: *Parser, event: Event) !void {
+        switch (self.sink) {
+            .document => {},
+            .events => |es| {
+                try es.handler.handle(event);
+            },
+        }
+    }
+
     fn nextToken(self: *Parser) !Token {
         if (self.peeked) |tok| {
             self.peeked = null;
@@ -1022,6 +1225,38 @@ pub const Parser = struct {
         return self.peeked.?;
     }
 };
+
+/// Run the parser in event-emitting mode. No Document is returned;
+/// instead the handler is invoked for every event in document order.
+/// Memory allocated during parsing (temporary key strings, rendered
+/// paths, decoded escapes) lives in a throwaway arena that is freed
+/// before this function returns. Slices handed to the handler are
+/// only valid for the duration of the `handleFn` call.
+pub fn parseEvents(
+    alloc: Allocator,
+    input: []const u8,
+    handler: EventHandler,
+    options: ParseOptions,
+) !void {
+    // UTF-8 validation is handled by the lexer on the fly (same as
+    // Parser.parse). The byte-length cap can be short-circuited up
+    // front to avoid spinning the lexer on oversize inputs.
+    if (input.len > options.max_bytes) return error.ParseFailed;
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var parser = Parser.init(alloc, input, options);
+    parser.sink = .{ .events = .{ .handler = handler } };
+    parser.current = try parser.nextToken();
+
+    // Use the arena for temporary allocations (key paths, decoded
+    // strings, container `Value`s that are discarded after each
+    // emission). The same entrypoint used by `parse` walks the input.
+    const throwaway_root = try val.createTable(arena_alloc);
+    try parser.parseDocument(arena_alloc, throwaway_root);
+}
 
 test "S-9 ParseOptions exposes max_keys and max_values caps" {
     const opts = ParseOptions{
