@@ -251,6 +251,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "parse_large", .root = "bench/parse_large.zig" },
         .{ .name = "parse_wide_table", .root = "bench/parse_wide_table.zig" },
         .{ .name = "parse_deep_nest", .root = "bench/parse_deep_nest.zig" },
+        .{ .name = "parse_strings", .root = "bench/parse_strings.zig" },
+        .{ .name = "parse_datetime", .root = "bench/parse_datetime.zig" },
     };
 
     for (bench_specs) |spec| {
