@@ -558,34 +558,12 @@ pub const Parser = struct {
         return string.decodeMultilineLiteralString(self, raw);
     }
 
-    fn decodeEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]const u8 {
-        return string.decodeEscapes(self, alloc, content);
-    }
-
-    fn decodeEscapeChar(
-        self: *Parser,
-        alloc: Allocator,
-        content: []const u8,
-        i: *usize,
-        result: *std.ArrayList(u8),
-    ) !void {
-        return string.decodeEscapeChar(self, alloc, content, i, result);
-    }
-
     fn parseInteger(self: *Parser, alloc: Allocator, raw: []const u8) !i64 {
         return number.parseInteger(self, alloc, raw);
     }
 
-    fn validateIntegerFormat(self: *Parser, raw: []const u8) !void {
-        return number.validateIntegerFormat(self, raw);
-    }
-
     fn parseFloat(self: *Parser, alloc: Allocator, raw: []const u8) !f64 {
         return number.parseFloat(self, alloc, raw);
-    }
-
-    fn validateFloatFormat(self: *Parser, raw: []const u8) !void {
-        return number.validateFloatFormat(self, raw);
     }
 
     fn parseDateTime(self: *Parser, raw: []const u8) !val.DateTime {
