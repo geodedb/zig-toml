@@ -161,15 +161,6 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Current state (evidence):** No `asInt() / asFloat() / asBool()` helpers on `Value`.
 - **Recommended fix:** Add safe accessors returning `!T`.
 
-### GAP-0016: Streaming parser API
-
-- **Issue:** [#14](https://gitlab.com/devnw/zig/toml/-/issues/14)
-- **Category:** Feature
-- **Severity:** Medium
-- **Requirement source:** REQ-14.
-- **Current state (evidence):** Only full-buffer parse is exposed.
-- **Recommended fix:** Feed `io.Reader` incrementally; emit `Document` on EOF.
-
 ### GAP-0017: SAX / event API
 
 - **Issue:** [#15](https://gitlab.com/devnw/zig/toml/-/issues/15)

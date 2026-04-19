@@ -128,3 +128,23 @@ GitLab issue operations attempted at 2026-04-18 closure time. `glab auth status`
   and comptime `toml.decode(T, alloc, doc)`.
 - **Tests:** See `src/schema.zig` test block and
   `examples/schema_validation.zig`.
+
+## Plan 09 closure (2026-04-18, feat/streaming-parser)
+
+### GAP-0016: Streaming parser API (resolved 2026-04-18)
+
+- **Issue:** [#14](https://gitlab.com/devnw/zig/toml/-/issues/14)
+- **Category:** Feature
+- **Severity:** Medium (was)
+- **Resolution:** Shipped `toml.parseStream(alloc, reader, opts)` --
+  Design A (buffering wrapper). Drains any `std.Io.Reader` into an
+  `opts.max_bytes`-bounded buffer, then delegates to `parse`. Truly
+  incremental lexing (Design B) remains tracked under v2.0.0 in
+  `docs/ROADMAP.md`.
+- **Evidence:**
+  - `src/toml.zig` -- `parseStream` implementation and two unit tests
+    (equivalence with `parse`, reader-error propagation).
+  - `tests/streaming.zig` -- acceptance suite (empty input, fixture
+    equivalence, ~1 MiB chunked input, `max_bytes` enforcement).
+  - `examples/streaming.zig` -- file + stdin example.
+  - `docs/API.md` -- reference entry.

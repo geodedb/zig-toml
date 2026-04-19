@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `toml.parseStream(alloc, reader, opts)` -- parse a TOML document from
+  any `std.Io.Reader` (file, socket, pipe). Implemented as a buffering
+  wrapper over `parse` that drains the reader into an
+  `opts.max_bytes`-bounded allocator-owned buffer. Closes GAP-0016
+  (Design A). See `examples/streaming.zig` and `docs/API.md`.
 - Schema validation module (`src/schema.zig`) providing both runtime
   `SchemaValidator` with `DiagnosticList` and a comptime-reflective
   `toml.decode(T, alloc, doc)`. Closes GAP-0015. Construction of

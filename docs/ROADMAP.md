@@ -52,7 +52,7 @@ Major version with streaming support:
 
 | Issue | Description | Priority |
 |-------|-------------|----------|
-| [#14](https://gitlab.com/devnw/zig/toml/-/issues/14) | Streaming/incremental parser | Medium |
+| [#14](https://gitlab.com/devnw/zig/toml/-/issues/14) | Streaming/incremental parser (Design B -- truly incremental lexer; Design A shipped as `parseStream`) | Medium |
 | [#15](https://gitlab.com/devnw/zig/toml/-/issues/15) | Event-based parsing API (SAX-style) | Low |
 | [#19](https://gitlab.com/devnw/zig/toml/-/issues/19) | Error recovery and partial parsing | Low |
 
