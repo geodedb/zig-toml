@@ -248,6 +248,7 @@ pub fn build(b: *std.Build) void {
 
     const bench_specs = [_]BenchSpec{
         .{ .name = "parse_small", .root = "bench/parse_small.zig" },
+        .{ .name = "parse_large", .root = "bench/parse_large.zig" },
     };
 
     for (bench_specs) |spec| {
