@@ -36,6 +36,8 @@ const Event
 const EventHandler
 const ParseError
 const ParseOptions
+const RecoveryMode
+const RecoveryResult
 const ArrayOpts
 const Decoded
 const DecodeError
@@ -68,6 +70,7 @@ const value_mod
 fn encode
 fn parse
 fn parseEvents
+fn parseRecover
 fn parseStream
 fn parseWithError
 fn writeTaggedJson

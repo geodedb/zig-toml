@@ -118,6 +118,50 @@ pub fn parseWithError(alloc: Allocator, input: []const u8, opts: ParseOptions) P
     return .{ .ok = doc };
 }
 
+pub const RecoveryMode = parser_mod.RecoveryMode;
+
+/// Result of a recovery-mode parse.
+///
+/// `document` contains everything that parsed successfully. When errors
+/// were encountered the document is necessarily partial, but it is always
+/// valid — callers can traverse it with `get` / `getPath` and the usual
+/// iterators. The `*Document` owns its arena and must be freed via
+/// `document.deinit()` (or equivalently via `RecoveryResult.deinit`).
+///
+/// `errors` is a slice allocated by the allocator passed to `parseRecover`.
+/// Freeing both the document and the errors slice is most easily done by
+/// calling `RecoveryResult.deinit(alloc)` with the same allocator.
+pub const RecoveryResult = struct {
+    document: *Document,
+    errors: []ParseError,
+
+    pub fn deinit(self: *RecoveryResult, alloc: Allocator) void {
+        self.document.deinit();
+        alloc.free(self.errors);
+    }
+};
+
+/// Parse TOML in recovery mode.
+///
+/// Unlike `parse` / `parseWithError`, this never bails on the first parse
+/// error. Syntactic problems are logged into `RecoveryResult.errors` and
+/// parsing resumes at the next safe synchronisation point (newline, next
+/// `[...]` / `[[...]]` header, matching `}`/`]` for broken inline tables
+/// and arrays). Only allocator failures (OOM) are propagated.
+///
+/// Recovery is bounded by `opts.max_recovery_errors` (default 100).
+/// `InvalidUtf8` and `max_bytes` violations are treated as terminal — a
+/// single error is recorded and an empty document is returned.
+///
+/// Regardless of the caller-supplied `opts.recovery_mode`, this function
+/// forces recovery semantics internally so callers that unconditionally
+/// call `parseRecover` get predictable behaviour.
+pub fn parseRecover(alloc: Allocator, input: []const u8, opts: ParseOptions) !RecoveryResult {
+    var effective = opts;
+    effective.recovery_mode = .recover;
+    return parser_mod.parseRecoverDocument(alloc, input, effective);
+}
+
 /// Parse TOML from a streaming reader into a Document.
 ///
 /// This is the streaming entry point that closes GAP-0016. Internally the
@@ -877,6 +921,14 @@ test "Event and EventHandler are re-exported from root" {
     // Type reference is enough; the union tag count lives in events.zig.
     _ = EventType;
     _ = HandlerType;
+}
+
+test "parseRecover returns empty document for empty input" {
+    var result = try parseRecover(std.testing.allocator, "", .{ .recovery_mode = .recover });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.errors.len);
+    try std.testing.expect(result.document.root.* == .table);
 }
 
 test "ParseOptions exposes recovery_mode and max_recovery_errors" {
