@@ -805,3 +805,51 @@ test "parseStream equivalence with parse for small input" {
 
     try std.testing.expectEqualStrings(base_aw.written(), streamed_aw.written());
 }
+
+/// Test-only reader that yields `good` bytes, then returns ReadFailed on the
+/// next read. Used to prove parseStream propagates reader errors verbatim.
+const FailingReader = struct {
+    good: []const u8,
+    consumed: usize = 0,
+    interface: std.Io.Reader,
+
+    fn init(good: []const u8, buf: []u8) FailingReader {
+        return .{
+            .good = good,
+            .interface = .{
+                .vtable = &vtable,
+                .buffer = buf,
+                .seek = 0,
+                .end = 0,
+            },
+        };
+    }
+
+    const vtable: std.Io.Reader.VTable = .{
+        .stream = stream,
+    };
+
+    fn stream(
+        r: *std.Io.Reader,
+        w: *std.Io.Writer,
+        limit: std.Io.Limit,
+    ) std.Io.Reader.StreamError!usize {
+        const self: *FailingReader = @fieldParentPtr("interface", r);
+        if (self.consumed < self.good.len) {
+            const remaining = self.good[self.consumed..];
+            const n = @min(@intFromEnum(limit), remaining.len);
+            try w.writeAll(remaining[0..n]);
+            self.consumed += n;
+            return n;
+        }
+        return error.ReadFailed;
+    }
+};
+
+test "parseStream propagates reader errors" {
+    var vbuf: [64]u8 = undefined;
+    var failing = FailingReader.init("title = \"partial", &vbuf);
+
+    const result = parseStream(std.testing.allocator, &failing.interface, .{});
+    try std.testing.expectError(error.ReadFailed, result);
+}
