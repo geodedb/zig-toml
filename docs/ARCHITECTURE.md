@@ -120,24 +120,23 @@ lexer as owning its own scan cursor and error latch.
 ### 3. Parser (parser.zig + parser/)
 
 Builds the value tree from the token stream. The parser is split into
-a top-level dispatch file (`src/parser.zig`) and three leaf submodules
-under `src/parser/` — `datetime.zig`, `number.zig`, and `string.zig` —
-each handling a single value family. The dispatch file holds the
-recursive-descent loop (`parseDocument` / `parseValue` / `parseArray`
-/ `parseInlineTable` / `parseKeyValue`) and all table-path resolution;
-the submodules are purely functional decoders that take a `*Parser`
-plus the raw token slice and return the decoded value or an error.
+a slim top-level dispatch file (`src/parser.zig`, kept under the Q-17
+LOC budget) and seven leaf submodules under `src/parser/`, each
+handling one construct or cross-cutting concern. The dispatch file
+holds the top-level `parseDocument` loop, `parseValue`, `parseKey(Value|Path)`,
+and one-line delegates that forward into each submodule; every
+submodule takes a `*Parser` plus its raw inputs and returns the
+decoded value or an error.
 
 **Responsibilities (parser.zig):**
 
 - Parse document structure (tables, arrays of tables, key-value pairs)
 - Build the Document and Value tree
-- Handle dotted keys and table paths
+- Handle dotted keys and table paths (via `parser/table_path.zig`)
 - Enforce TOML semantic rules (no duplicate keys, table redefinition, etc.)
 - Version-gated features (v1.0 vs v1.1 differences)
-- Orchestrate the inline-table pipeline
-  (`parseInlineTableHeader` → `parseInlineTableBody` →
-  `validateInlineTableV10Restrictions`)
+- Forward each container construct to the owning submodule
+  (`parser/array.zig`, `parser/inline_table.zig`)
 
 **Responsibilities (parser/ submodules):**
 
@@ -148,6 +147,22 @@ plus the raw token slice and return the decoded value or an error.
   via a flat state machine (`classifyFloatByte` + `stepFloat`)
 - `parser/string.zig` — basic / literal / multi-line string decoders
   and escape-sequence handling
+- `parser/array.zig` — `[ ... ]` literal arrays plus the `[[` nested
+  array edge case, sharing the `skipArrayWhitespace` / `consumeArrayClose`
+  helpers
+- `parser/inline_table.zig` — the inline-table pipeline
+  (`parseInlineTableHeader` → `parseInlineTableBody` →
+  `validateInlineTableV10Restrictions`) plus the `mergeTables`
+  dotted-key merge helper
+- `parser/table_path.zig` — the `resolveTablePath` walker for
+  `[a.b.c]` and `[[a.b.c]]` headers, honouring the array-of-tables
+  and explicit-vs-implicit rules
+- `parser/events_sink.zig` — the `ParseSink` union and `emit*`
+  helpers that dispatch between document-mode writes and events-mode
+  handler calls; also hosts `renderKeyPath` for dotted-path rendering
+- `parser/recovery.zig` — the `parseRecoverDocument` entry point plus
+  the recover-loop and statement-boundary scanner used when callers
+  opt into partial-parse mode
 
 **Parsing Strategy:**
 
@@ -517,15 +532,25 @@ src/
 │                      # parseInlineTable (header/body/validation),
 │                      # key-value, table-path resolution
 ├── parser/
-│   ├── datetime.zig   # RFC 3339 offset/local date/time parsers with
-│   │                  # shared parseDateParts / parseTimeParts /
-│   │                  # parseOffset helpers and leap-year / calendar /
-│   │                  # range validators
-│   ├── number.zig     # Integer + float parsers; flat state-machine
-│   │                  # validator for float format (classifyFloatByte +
-│   │                  # stepFloat)
-│   └── string.zig     # Basic / literal / multi-line string decoders
-│                      # plus escape-sequence handling
+│   ├── datetime.zig     # RFC 3339 offset/local date/time parsers with
+│   │                    # shared parseDateParts / parseTimeParts /
+│   │                    # parseOffset helpers and leap-year / calendar /
+│   │                    # range validators
+│   ├── number.zig       # Integer + float parsers; flat state-machine
+│   │                    # validator for float format (classifyFloatByte +
+│   │                    # stepFloat)
+│   ├── string.zig       # Basic / literal / multi-line string decoders
+│   │                    # plus escape-sequence handling
+│   ├── array.zig        # [ ... ] literal arrays, [[ nested arrays in
+│   │                    # value context, shared skipArrayWhitespace
+│   ├── inline_table.zig # parseInlineTableHeader / Body / validate
+│   │                    # pipeline plus the mergeTables dotted-key
+│   │                    # merge helper
+│   ├── table_path.zig   # resolveTablePath walker for [a.b.c] /
+│   │                    # [[a.b.c]] header navigation
+│   ├── events_sink.zig  # ParseSink union, emit* helpers, renderKeyPath
+│   └── recovery.zig     # parseRecoverDocument + recover-loop +
+│                        # statement-boundary scanner (partial-parse)
 ├── lexer.zig          # Tokenizer
 ├── value.zig          # Value types and Document
 ├── error.zig          # Error types

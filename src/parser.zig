@@ -21,6 +21,7 @@ const recovery = @import("parser/recovery.zig");
 const events_sink = @import("parser/events_sink.zig");
 const inline_table = @import("parser/inline_table.zig");
 const table_path = @import("parser/table_path.zig");
+const array_mod = @import("parser/array.zig");
 const Value = val.Value;
 const Document = val.Document;
 const TableEntry = val.TableEntry;
@@ -515,223 +516,15 @@ pub const Parser = struct {
     }
 
     fn parseArray(self: *Parser, alloc: Allocator) ParseValueError!Value {
-        // Defense-in-depth: parseArray is normally called via parseValue
-        // (which already guards), but any alternate caller (e.g. future
-        // direct invocation) would bypass the recursion cap. Guard here
-        // too so the protection holds regardless of call path.
-        try self.enterDepth();
-        defer self.exitDepth();
-
-        self.current = try self.nextToken(); // consume [
-
-        // 16-slot initial capacity covers most literal arrays without
-        // the ArrayList's doubling ladder (0->8->16 saves two reallocs).
-        // After P-10, items are Value (not *Value) so the parser's
-        // per-element `create(Value)` allocation in parseValue is the
-        // only heap touch per element; elements live contiguously here.
-        var items: std.ArrayListUnmanaged(Value) = .empty;
-        try items.ensureTotalCapacity(alloc, 16);
-
-        // For event-mode, announce array start before consuming any items.
-        try events_sink.emitSimple(self, .array_start);
-
-        // Skip whitespace and newlines
-        try self.skipArrayWhitespace();
-
-        while (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close and self.current.tag != .eof) {
-            const item = try self.parseValue(alloc);
-            try items.append(alloc, item.*);
-            // For scalar items, also emit array_item. Container items
-            // (tables / nested arrays) have already fired their own
-            // start/end events from inside parseValue -> parseInlineTable
-            // / parseArray; we do NOT want to wrap them in an
-            // `array_item`.
-            switch (item.*) {
-                .table, .array => {},
-                else => try events_sink.emitSimple(self, .{ .array_item = item.* }),
-            }
-
-            try self.skipArrayWhitespace();
-
-            if (self.current.tag == .comma) {
-                self.current = try self.nextToken();
-                try self.skipArrayWhitespace();
-            } else if (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close) {
-                self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected ',' or ']'");
-                return error.ParseFailed;
-            }
-        }
-
-        // Handle ]] (double_bracket_close) - consume only one ]
-        if (self.current.tag == .double_bracket_close) {
-            // Leave one ] for the outer context by converting to right_bracket
-            self.current = Token{
-                .tag = .right_bracket,
-                .start = self.current.start + 1,
-                .end = self.current.end,
-                .pos = .{
-                    .byte_index = self.current.pos.byte_index + 1,
-                    .line = self.current.pos.line,
-                    .column = self.current.pos.column + 1,
-                },
-            };
-        } else if (self.current.tag == .right_bracket) {
-            self.current = try self.nextToken();
-        } else {
-            self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected ']'");
-            return error.ParseFailed;
-        }
-
-        try events_sink.emitSimple(self, .array_end);
-
-        return Value{ .array = .{ .items = items, .is_static = true } };
+        return array_mod.parseArray(self, alloc);
     }
 
     fn parseNestedArrayFromDoubleBracket(self: *Parser, alloc: Allocator) ParseValueError!Value {
-        // We saw [[ which the lexer tokenized as double_bracket_open
-        // In value context, this is a nested array: [ [ ... ] ... ]
-        // We treat the [[ as the start of outer array + start of inner array
-        try self.enterDepth();
-        defer self.exitDepth();
-
-        self.current = try self.nextToken(); // consume [[
-
-        // Items stored by value (P-10): append the inner array Value
-        // directly, without the extra per-element `create(Value)` that
-        // was only needed when the slot type was *Value.
-        var outer_items: std.ArrayListUnmanaged(Value) = .empty;
-        try outer_items.ensureTotalCapacity(alloc, 16);
-
-        // Event-mode: announce the outer array start. The inner array's
-        // own start/end fires from parseArrayContents below, so the
-        // consumer observes `[, [, ..., ], ... , ]`.
-        try events_sink.emitSimple(self, .array_start);
-
-        // Parse the inner array (we're already "inside" it after consuming [[)
-        try self.bumpValues();
-        try outer_items.append(alloc, try self.parseArrayContents(alloc));
-
-        // Now continue parsing the outer array (same logic as parseArray after first item)
-        try self.skipArrayWhitespace();
-
-        while (true) {
-            if (self.current.tag == .comma) {
-                self.current = try self.nextToken();
-                try self.skipArrayWhitespace();
-                // Check for trailing comma
-                if (self.current.tag == .right_bracket or self.current.tag == .double_bracket_close) break;
-            } else if (self.current.tag == .right_bracket or self.current.tag == .double_bracket_close) {
-                break;
-            } else {
-                self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected ',' or ']'");
-                return error.ParseFailed;
-            }
-
-            const item = try self.parseValue(alloc);
-            try outer_items.append(alloc, item.*);
-            // Same scalar-vs-container distinction as parseArray.
-            switch (item.*) {
-                .table, .array => {},
-                else => try events_sink.emitSimple(self, .{ .array_item = item.* }),
-            }
-            try self.skipArrayWhitespace();
-        }
-
-        // Handle ]] (double_bracket_close) - consume only one ]
-        if (self.current.tag == .double_bracket_close) {
-            // Leave one ] for any outer context by converting to right_bracket
-            self.current = Token{
-                .tag = .right_bracket,
-                .start = self.current.start + 1,
-                .end = self.current.end,
-                .pos = .{
-                    .byte_index = self.current.pos.byte_index + 1,
-                    .line = self.current.pos.line,
-                    .column = self.current.pos.column + 1,
-                },
-            };
-        } else if (self.current.tag == .right_bracket) {
-            self.current = try self.nextToken();
-        } else {
-            self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected ']'");
-            return error.ParseFailed;
-        }
-
-        try events_sink.emitSimple(self, .array_end);
-
-        return Value{ .array = .{ .items = outer_items, .is_static = true } };
-    }
-
-    fn parseArrayContents(self: *Parser, alloc: Allocator) ParseValueError!Value {
-        // Defense-in-depth: guard here too because this function can be
-        // reached from parseNestedArrayFromDoubleBracket's inner call.
-        try self.enterDepth();
-        defer self.exitDepth();
-
-        // Parse array contents after the opening [ has been consumed.
-        // By-value element storage (P-10): collect Value directly.
-        var items: std.ArrayListUnmanaged(Value) = .empty;
-        try items.ensureTotalCapacity(alloc, 16);
-
-        // Event-mode: announce this inner array. Called from
-        // parseNestedArrayFromDoubleBracket which has already emitted
-        // its own outer `.array_start`.
-        try events_sink.emitSimple(self, .array_start);
-
-        try self.skipArrayWhitespace();
-
-        while (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close and self.current.tag != .eof) {
-            const item = try self.parseValue(alloc);
-            try items.append(alloc, item.*);
-            switch (item.*) {
-                .table, .array => {},
-                else => try events_sink.emitSimple(self, .{ .array_item = item.* }),
-            }
-
-            try self.skipArrayWhitespace();
-
-            if (self.current.tag == .comma) {
-                self.current = try self.nextToken();
-                try self.skipArrayWhitespace();
-            } else if (self.current.tag != .right_bracket and self.current.tag != .double_bracket_close) {
-                self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected ',' or ']'");
-                return error.ParseFailed;
-            }
-        }
-
-        // Handle ]] (double_bracket_close) - consume only one ]
-        if (self.current.tag == .double_bracket_close) {
-            // Leave one ] for the outer array by converting to right_bracket
-            self.current = Token{
-                .tag = .right_bracket,
-                .start = self.current.start + 1,
-                .end = self.current.end,
-                .pos = .{
-                    .byte_index = self.current.pos.byte_index + 1,
-                    .line = self.current.pos.line,
-                    .column = self.current.pos.column + 1,
-                },
-            };
-        } else if (self.current.tag == .right_bracket) {
-            self.current = try self.nextToken();
-        } else {
-            self.parse_error = err.makeError(.UnexpectedToken, self.current.pos, "expected ']'");
-            return error.ParseFailed;
-        }
-
-        try events_sink.emitSimple(self, .array_end);
-
-        return Value{ .array = .{ .items = items, .is_static = true } };
+        return array_mod.parseNestedArrayFromDoubleBracket(self, alloc);
     }
 
     fn parseInlineTable(self: *Parser, alloc: Allocator) ParseValueError!Value {
         return inline_table.parseInlineTable(self, alloc);
-    }
-
-    fn skipArrayWhitespace(self: *Parser) !void {
-        while (self.current.tag == .newline or self.current.tag == .comment) {
-            self.current = try self.nextToken();
-        }
     }
 
     fn skipToNewline(self: *Parser) !void {
