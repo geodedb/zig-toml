@@ -424,22 +424,24 @@ pub const ParseOptions = struct {
 
 ## Performance Characteristics
 
-### Time Complexity
+Measured per-component baselines live in
+[`docs/PERFORMANCE.md`](PERFORMANCE.md). Any Big-O claim made in this
+document before 2026-04 is no longer authoritative -- trust the
+benchmark table rather than an in-source assertion.
 
-| Operation | Complexity |
-|-----------|------------|
-| Lexing | O(n) where n = input bytes |
-| Parsing | O(n) for simple documents |
-| Table lookup (get) | O(k) where k = keys in table |
-| Path lookup (getPath) | O(p * k) where p = path length |
+### Complexity guarantees still worth stating
 
-### Space Complexity
+- `Value.Table` uses `std.StringArrayHashMapUnmanaged(*Value)`, so
+  lookups via `get` / `getPath` are amortized O(1) per hop and insertion
+  order is preserved (closes P-1/P-2/P-12). `getPath` with a `p`-deep
+  path therefore costs O(p) hops, not O(p * k).
+- Depth is bounded by `ParseOptions.max_depth` (default 128) and input
+  size by `ParseOptions.max_bytes` (default 16 MiB). Neither bound is a
+  performance claim; both are resource-exhaustion guards.
 
-| Metric | Value |
-|--------|-------|
-| Parser state | O(1) |
-| Document size | O(n) proportional to input |
-| String storage | Deduplicated where possible |
+Exact constants -- `p50_ns`, `p99_ns`, peak bytes -- are reported per
+benchmark in `docs/PERFORMANCE.md` and published as an artifact by the
+`bench` CI stage.
 
 ## Extension Points
 
@@ -640,6 +642,15 @@ Each entry point falls back to a sequential loop below a minimum batch
 size (4 for parse, 8 for validate/extract) to amortize thread-pool
 submission overhead. Above the threshold, inputs are split via ceiling
 division so the tail of a batch is never dropped.
+
+## Benchmarks
+
+Microbenchmarks live under `bench/` and are wired as
+`zig build bench-<name>`, `zig build bench` (all per-benchmark
+executables plus the legacy `tests/bench_table_insert.zig` hard
+ceilings), and `zig build bench-all` (one process, one summary table).
+Baselines and the regression-threshold policy are in
+[`docs/PERFORMANCE.md`](PERFORMANCE.md).
 
 ---
 

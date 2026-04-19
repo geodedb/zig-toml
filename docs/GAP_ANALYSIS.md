@@ -124,11 +124,18 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ### GAP-0011: Bench suite not implemented
 
+- **Status:** Closed (2026-04-18) -- see plan
+  `docs/superpowers/plans/2026-04-18-12-bench-harness.md` and
+  `docs/PERFORMANCE.md`.
 - **Issue:** [#3](https://gitlab.com/devnw/zig/toml/-/issues/3)
 - **Category:** Test
 - **Severity:** High
 - **Requirement source:** REQ-03.
-- **Current state (evidence):** No `bench/` directory; `build.zig` has no `bench` step.
+- **Current state (evidence):** `bench/` directory with seven microbenchmarks
+  plus shared harness; `build.zig` exposes `bench-<name>`, `bench`, and
+  `bench-all` steps; `.gitlab-ci.yml` publishes `bench.csv` via an
+  `allow_failure: true` `bench` stage; `docs/PERFORMANCE.md` records the
+  baselines.
 - **Why this is a gap:** Performance regressions cannot be detected.
 - **Recommended fix:** Add a `zig build bench` step with reproducible inputs and JSON output.
 - **Acceptance criteria:** `zig build bench` runs; CI nightly publishes results.

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Microbenchmark suite (`zig build bench`, `zig build bench-all`,
+  `-Dbench-filter=<name>`). Seven benchmarks covering small/large/wide/
+  deeply-nested/escape-heavy/datetime-heavy parsing plus
+  `parallel.parseDocuments` across N in {4, 16, 64, 256}. Shared harness
+  in `bench/common.zig` (atomic `CountingAllocator`,
+  `clock_gettime(.MONOTONIC)`-backed `monotonicNs`, `runBench` helper)
+  plus deterministic input generators in `bench/inputs.zig` (fixed
+  seeds `0xDEADBEEF`, `0xCAFEBABE`, `0xFEEDFACE`). CI gains an
+  `allow_failure: true` `bench` stage publishing `bench.csv` and
+  `bench.stderr` as 4-week artifacts. See
+  [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for baselines and the
+  regression-threshold policy. Closes GAP-0011.
 - `toml.parseRecover` entry point plus `RecoveryResult` and
   `RecoveryMode` public types for partial-parse / error-recovery
   workflows (e.g. IDE integrations, linters, CI gates). Logs every

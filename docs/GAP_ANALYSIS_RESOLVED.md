@@ -232,3 +232,49 @@ GitLab issue operations attempted at 2026-04-18 closure time. `glab auth status`
   - `docs/PUBLIC_API.md` -- new `const RecoveryMode`,
     `const RecoveryResult`, `fn parseRecover` entries.
   - `CHANGELOG.md` -- Unreleased `### Added` bullet.
+
+## Plan 12 closure (2026-04-18, feat/bench-harness)
+
+### GAP-0011: Bench suite not implemented (resolved 2026-04-18)
+
+- **Issue:** [#3](https://gitlab.com/devnw/zig/toml/-/issues/3)
+- **Category:** Test
+- **Severity:** High (was)
+- **Requirement source:** REQ-03.
+- **Resolution:** Shipped a reproducible microbenchmark suite under
+  `bench/`. Seven benchmarks (`parse_small`, `parse_large`,
+  `parse_wide_table`, `parse_deep_nest`, `parse_strings`,
+  `parse_datetime`, `parallel_parse`) each report `p50_ns`, `p99_ns`,
+  and peak outstanding bytes after a warmup phase. A shared
+  `bench/common.zig` harness exposes `runBench`, an atomic
+  `CountingAllocator`, and a `clock_gettime(.MONOTONIC)`-backed
+  `monotonicNs` (replacement for `std.time.Timer`, which was removed in
+  Zig 0.16). Deterministic input generators in `bench/inputs.zig` use
+  fixed seeds (`0xDEADBEEF`, `0xCAFEBABE`, `0xFEEDFACE`). `build.zig`
+  exposes per-benchmark `bench-<name>` steps, an aggregate `bench` step
+  (which also still runs the hard-ceiling B-1/B-2 tests in
+  `tests/bench_table_insert.zig`), a `bench-all` orchestrator
+  (`bench/main.zig`) that prints one CSV row per benchmark to stdout
+  plus a human-readable table to stderr, and a `-Dbench-filter=<name>`
+  option. `.gitlab-ci.yml` gains an `allow_failure: true` `bench` stage
+  publishing `bench.csv` / `bench.stderr` as 4-week pipeline artifacts.
+- **Evidence:**
+  - `bench/common.zig` -- `Stats`, `CountingAllocator` (atomic counters
+    so threads spawned by the `thread_pool` can share one wrapper),
+    `runBench`, `monotonicNs`, `seededPrng`.
+  - `bench/inputs.zig` -- `small_config` literal plus
+    `generateLarge`, `generateWideTable`, `generateDeepNest`,
+    `generateStrings`, `generateDateTimes`.
+  - `bench/parse_small.zig`, `bench/parse_large.zig`,
+    `bench/parse_wide_table.zig`, `bench/parse_deep_nest.zig`,
+    `bench/parse_strings.zig`, `bench/parse_datetime.zig`,
+    `bench/parallel_parse.zig`, `bench/main.zig`.
+  - `build.zig` -- `BenchSpec` loop + `bench-all` wiring +
+    `-Dbench-filter` option.
+  - `.gitlab-ci.yml` -- `bench` stage under `allow_failure: true`.
+  - `docs/PERFORMANCE.md` -- baseline table + regression-threshold
+    policy.
+  - `docs/ARCHITECTURE.md` -- Performance Characteristics section now
+    defers to `docs/PERFORMANCE.md`; new `## Benchmarks` reference
+    section at the end.
+  - `CHANGELOG.md` -- Unreleased `### Added` bullet.
