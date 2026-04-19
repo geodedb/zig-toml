@@ -192,3 +192,43 @@ GitLab issue operations attempted at 2026-04-18 closure time. `glab auth status`
   - `docs/PUBLIC_API.md` -- new `const Event`, `const EventHandler`,
     `const events`, `fn parseEvents` entries.
   - `CHANGELOG.md` -- Unreleased `### Added` bullet.
+
+## Plan 11 closure (2026-04-18, feat/partial-parse-error-recovery)
+
+### GAP-0020: Partial-parse / error-recovery (resolved 2026-04-18)
+
+- **Issue:** [#19](https://gitlab.com/devnw/zig/toml/-/issues/19)
+- **Category:** Feature
+- **Severity:** Medium (was)
+- **Requirement source:** REQ-19.
+- **Resolution:** Shipped `toml.parseRecover(alloc, input, opts)` plus
+  new public types `RecoveryResult` (`*Document` + `[]ParseError` +
+  `deinit`) and `RecoveryMode` (`strict` | `recover`). `ParseOptions`
+  gained `recovery_mode: RecoveryMode = .strict` and
+  `max_recovery_errors: usize = 100`. Internally, the new
+  `parseRecoverDocument` / `recoverParseLoop` / `recoverAdvancePastLine`
+  helpers wrap `parseKeyValue` / `parseTableHeader` in try-catch and
+  advance past each failed statement at the nearest safe boundary
+  (newline at depth zero, next `[` / `[[`, matching `}` for an
+  unbalanced inline-table opener, matching `]` for an unbalanced array
+  opener). Forward progress is guaranteed: `recoverAdvancePastLine`
+  always consumes at least one token. Strict mode (`parse` /
+  `parseWithError`) is unchanged. `InvalidUtf8` and `max_bytes`
+  violations short-circuit to an empty document plus a single error
+  entry -- continuing on untrusted bytes is not meaningful.
+- **Evidence:**
+  - `src/parser.zig` -- `RecoveryMode` enum, `ParseOptions` fields,
+    `parseRecoverDocument`, `recoverParseLoop`, `recoverAdvancePastLine`,
+    `recordParserError`.
+  - `src/toml.zig` -- `RecoveryResult` public type, `RecoveryMode`
+    re-export, `parseRecover` public wrapper, eight unit tests
+    (empty input, single bad line between good, consecutive bad
+    lines no-infinite-loop, broken table header, inline-table
+    bounded by `}`, array bounded by `]`, `max_recovery_errors` cap,
+    strict mode unaffected, invalid UTF-8 terminal, plus options
+    smoke test).
+  - `examples/lint_toml.zig` -- CLI lint example using `parseRecover`.
+  - `docs/API.md` -- "Error recovery" reference section.
+  - `docs/PUBLIC_API.md` -- new `const RecoveryMode`,
+    `const RecoveryResult`, `fn parseRecover` entries.
+  - `CHANGELOG.md` -- Unreleased `### Added` bullet.

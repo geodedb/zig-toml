@@ -185,12 +185,17 @@ Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ### GAP-0020: Partial-parse / error-recovery
 
+- **Status:** Closed -- feat/partial-parse-error-recovery (2026-04-18).
+  Moved to `docs/GAP_ANALYSIS_RESOLVED.md`.
 - **Issue:** [#19](https://gitlab.com/devnw/zig/toml/-/issues/19)
 - **Category:** Feature
 - **Severity:** Medium
 - **Requirement source:** REQ-19.
-- **Current state (evidence):** Parser bails on first error.
-- **Recommended fix:** Continue-on-error mode emitting multiple diagnostics.
+- **Resolution:** `toml.parseRecover(alloc, input, opts)` plus
+  `RecoveryResult` / `RecoveryMode` public types; `ParseOptions` gained
+  `recovery_mode` and `max_recovery_errors`. See
+  `docs/GAP_ANALYSIS_RESOLVED.md` (Plan 11 closure) for the full
+  evidence list.
 
 ### GAP-0021: v1.1.0 spec compliance audit matrix
 
