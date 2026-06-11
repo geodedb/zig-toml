@@ -44,6 +44,18 @@ pub fn parseInteger(self: *Parser, alloc: Allocator, raw: []const u8) !i64 {
         }
     }
 
+    // P-NEW-2: fast path. The common case has no underscores, so no scratch
+    // buffer is needed. For base 10 the original `raw` (sign included) parses
+    // directly; for prefixed bases a sign is disallowed (enforced by
+    // validateIntegerFormat) and `raw[start..]` is the bare digit body.
+    if (std.mem.indexOfScalar(u8, raw, '_') == null) {
+        const body = if (base == 10) raw else raw[start..];
+        return std.fmt.parseInt(i64, body, base) catch {
+            self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "invalid integer");
+            return error.ParseFailed;
+        };
+    }
+
     for (raw[start..]) |c| {
         if (c != '_') {
             if (clean.items.len >= self.options.max_bytes) {
@@ -155,6 +167,15 @@ pub fn parseFloat(self: *Parser, alloc: Allocator, raw: []const u8) !f64 {
 
     // Validate float format
     try validateFloatFormat(self, raw);
+
+    // P-NEW-2: fast path. No underscores means the raw slice (sign and all)
+    // parses directly with no scratch buffer.
+    if (std.mem.indexOfScalar(u8, raw, '_') == null) {
+        return std.fmt.parseFloat(f64, raw) catch {
+            self.parse_error = err.makeError(.InvalidNumber, self.current.pos, "invalid float");
+            return error.ParseFailed;
+        };
+    }
 
     // Remove underscores. Grow as needed; max_bytes caps pathological inputs.
     var clean: std.ArrayList(u8) = try .initCapacity(alloc, 128);
@@ -356,4 +377,28 @@ test "validateFloatFormat accepts grouped underscores" {
 test "validateFloatFormat accepts signed exponent" {
     try expectFloatAccept("6.022e+23");
     try expectFloatAccept("1.0e-10");
+}
+
+test "P-NEW-2 number fast-path correctness (with and without underscores)" {
+    const toml = @import("../toml.zig");
+    const a = testing.allocator;
+    {
+        const doc = try toml.parse(a, "a = 1234\nb = 1_2_3_4\nc = 0xFF\nd = 0b1010\ne = 0o17\nf = -42\ng = +7\nh = -9223372036854775808\n", .{});
+        defer doc.deinit();
+        try testing.expectEqual(@as(i64, 1234), doc.root.table.map.get("a").?.integer);
+        try testing.expectEqual(@as(i64, 1234), doc.root.table.map.get("b").?.integer);
+        try testing.expectEqual(@as(i64, 255), doc.root.table.map.get("c").?.integer);
+        try testing.expectEqual(@as(i64, 10), doc.root.table.map.get("d").?.integer);
+        try testing.expectEqual(@as(i64, 15), doc.root.table.map.get("e").?.integer);
+        try testing.expectEqual(@as(i64, -42), doc.root.table.map.get("f").?.integer);
+        try testing.expectEqual(@as(i64, 7), doc.root.table.map.get("g").?.integer);
+        try testing.expectEqual(@as(i64, std.math.minInt(i64)), doc.root.table.map.get("h").?.integer);
+    }
+    {
+        const doc = try toml.parse(a, "x = 3.14\ny = 1_000.000_1\nz = -6.022e+23\n", .{});
+        defer doc.deinit();
+        try testing.expect(@abs(doc.root.table.map.get("x").?.float - 3.14) < 1e-9);
+        try testing.expect(@abs(doc.root.table.map.get("y").?.float - 1000.0001) < 1e-6);
+        try testing.expect(doc.root.table.map.get("z").?.float < -6.0e23);
+    }
 }
