@@ -566,6 +566,19 @@ pub fn tableSet(alloc: Allocator, table: *Value, key: []const u8, value: *Value)
     try t.map.put(alloc, key, value);
 }
 
+/// Insert `value` only if `key` is absent. Returns true if inserted,
+/// false if the key already existed (the stored value is left unchanged).
+/// A single O(1) probe via getOrPut, vs. tableContains + tableSet which
+/// hashes twice. P-NEW-4.
+pub fn tableSetIfAbsent(alloc: Allocator, table: *Value, key: []const u8, value: *Value) !bool {
+    std.debug.assert(table.* == .table);
+    const t = &table.table;
+    const gop = try t.map.getOrPut(alloc, key);
+    if (gop.found_existing) return false;
+    gop.value_ptr.* = value;
+    return true;
+}
+
 /// Check if a table contains a key. O(1).
 pub fn tableContains(table: *const Value, key: []const u8) bool {
     return switch (table.*) {

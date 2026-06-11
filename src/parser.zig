@@ -329,11 +329,11 @@ pub const Parser = struct {
         const final_key = path.items[path.items.len - 1];
         switch (self.sink) {
             .document => {
-                if (val.tableContains(target, final_key)) {
+                // P-NEW-4: single getOrPut probe instead of contains+put.
+                if (!try val.tableSetIfAbsent(alloc, target, final_key, value)) {
                     self.parse_error = err.makeError(.DuplicateKey, key_pos, "duplicate key");
                     return error.ParseFailed;
                 }
-                try val.tableSet(alloc, target, final_key, value);
             },
             .events => {
                 // Events mode: scalar key_value fires AFTER value is
