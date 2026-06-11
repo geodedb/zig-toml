@@ -595,6 +595,29 @@ test "U-H deep nested inline tables rejected" {
     }
 }
 
+test "APP-01 truncated datetime tokens error, never panic" {
+    const alloc = std.testing.allocator;
+    // Each crashed the parser with an out-of-bounds slice before the fix.
+    const cases = [_][]const u8{
+        "d = 1234-12:\n",
+        "d = 1234-12:Z\n",
+        "d = 2020-01-01T01:\n",
+        "d = 2020-01-01T01:02:\n",
+        "d = 0000-0\n",
+        "d = 1234-1\n",
+    };
+    for (cases) |src| {
+        const result = parseWithError(alloc, src, .{});
+        switch (result) {
+            .ok => |doc| {
+                doc.deinit();
+                try std.testing.expect(false); // must reject, not accept
+            },
+            .err => {}, // clean error, no panic — the contract
+        }
+    }
+}
+
 test "parallel re-export is reachable" {
     // Smoke test: verify parallel.zig is reachable through the public
     // toml root module and the batch parse entry point works end-to-end.

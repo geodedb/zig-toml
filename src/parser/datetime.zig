@@ -49,6 +49,15 @@ const OffsetParts = struct {
 fn parseDateParts(self: *Parser, raw: []const u8, idx: usize) !DateParts {
     var i: usize = idx;
 
+    // APP-01: YYYY-MM-DD needs exactly 10 chars from idx (year raw[i..i+4],
+    // month raw[i+5..i+7], day raw[i+8..i+10]). Guard before slicing so a
+    // truncated datetime token returns a clean error instead of an
+    // out-of-bounds slice (panic in safe modes, OOB read in ReleaseFast).
+    if (idx + 10 > raw.len) {
+        self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "truncated date");
+        return error.ParseFailed;
+    }
+
     const year = std.fmt.parseInt(u16, raw[i .. i + 4], 10) catch {
         self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid year");
         return error.ParseFailed;
@@ -81,6 +90,14 @@ fn parseTimeParts(
     require_seconds_v1_0: bool,
 ) !TimeParts {
     var i: usize = idx;
+
+    // APP-01: HH:MM needs 5 chars from idx (hour raw[i..i+2], minute
+    // raw[i+3..i+5]). The optional :SS / .frac tails below already
+    // bounds-check; guard the fixed head here.
+    if (idx + 5 > raw.len) {
+        self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "truncated time");
+        return error.ParseFailed;
+    }
 
     const hour = std.fmt.parseInt(u8, raw[i .. i + 2], 10) catch {
         self.parse_error = err.makeError(.InvalidDateTime, self.current.pos, "invalid hour");
