@@ -34,12 +34,29 @@ rest were closed this iteration.
 
 **New gaps found this audit (running the full upstream corpus):**
 
-- **GAP-0029** -- TOML 1.1 Unicode bare keys unsupported. The lexer rejects
-  `€ = 'x'` (toml-test `valid/key/unicode`). Severity: Medium (1.1 feature gap).
-- **GAP-0030** -- Encoder conformance: ~26 `toml-test -encoder` failures at
-  `-toml 1.1.0` (escapes, inline tables, dotted keys, datetimes, unicode keys).
-  Severity: High (correctness gaps in a shipped feature). Blocks flipping the
-  encoder conformance gate to enforced.
+- **GAP-0030** -- Encoder conformance. **Closed this iteration.** Two real
+  encoder bugs were found and fixed: (1) U+007F (DEL) emitted raw instead of
+  escaped (commit `9a0645a`'s predecessor), and (2) a `sortedCopy` threadlocal
+  buffer aliased across recursive `writeTableBody` calls, emitting spurious
+  duplicate table headers like `[a.more]` (commit `9a0645a`). Encoder
+  conformance went 161 -> 182/182 verifiable at `-toml 1.1.0`; the gate is now
+  ENFORCED (`allow_failure: false`, commit `b7fc996`). The 5 `-skip`ped cases
+  are toml-test harness limitations ("BUG IN TEST CASE": its own reference
+  decoder can't parse its own 1.1 expected files), not encoder defects.
+- **GAP-0029** -- TOML 1.1 Unicode bare keys unsupported. The lexer's
+  `isBareKeyChar` is ASCII-only, so `€ = 'x'` (toml-test `valid/key/unicode`)
+  is rejected even in v1.1.0 mode. Severity: Medium. **Open / deferred** to a
+  focused feature pass: TOML 1.1 is an unstable spec, and a correct
+  implementation needs the full allowed Unicode scalar-range set, multi-byte
+  decode in two lexer scan loops + the dispatch, and version-gating (reject in
+  v1.0.0). The enforced decoder gate explicitly `-skip`s this one case.
+  Acceptance: `valid/key/unicode` passes at `-toml 1.1.0`, is rejected at
+  `-toml 1.0.0`, with lexer unit tests over representative ranges.
+
+Also fixed this iteration (decoder correctness, found via the full corpus):
+floats with leading zeros (`03.14`) were accepted and parsed as `3.14`; now
+rejected (commit `b84bc50`). Decoder conformance is 547/548 at `-toml 1.1.0`
+(the one remaining is GAP-0029).
 
 Catalog (historical, pre-2026-06-11): originally 21 open gaps; +3
 (0022/0023/0024) in 2026-04-19. Post-closure status:
@@ -47,8 +64,8 @@ Catalog (historical, pre-2026-06-11): originally 21 open gaps; +3
 - Fully closed: GAP-0002, GAP-0003, GAP-0005, GAP-0006, GAP-0007,
   GAP-0008, GAP-0010, GAP-0011, GAP-0015, GAP-0016, GAP-0017,
   GAP-0020, GAP-0021, GAP-0023
-- Closed 2026-06-11: GAP-0001, 0004, 0009, 0012, 0013, 0014, 0018, 0019, 0022, 0024
-- Open after 2026-06-11: GAP-0029 (Unicode bare keys), GAP-0030 (encoder conformance)
+- Closed 2026-06-11: GAP-0001, 0004, 0009, 0012, 0013, 0014, 0018, 0019, 0022, 0024, 0030
+- Open after 2026-06-11: GAP-0029 (TOML 1.1 Unicode bare keys -- deferred feature)
 Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ## Gaps
