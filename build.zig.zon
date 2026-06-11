@@ -1,6 +1,6 @@
 .{
     .name = .toml,
-    .version = "0.1.4",
+    .version = "0.1.5",
     .fingerprint = 0x12c55c5387d27930,
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
