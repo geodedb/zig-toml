@@ -242,6 +242,19 @@ pub fn validateFloatFormat(self: *Parser, raw: []const u8) !void {
     if (raw[0] == '+' or raw[0] == '-') start = 1;
     if (start == raw.len) return raiseFloat(self, "float sign with no digits");
 
+    // Reject leading zeros in the integer part (e.g. 03.14, 00.5, 0_0.0).
+    // The integer part runs from `start` up to the first '.', 'e', or 'E';
+    // a length > 1 beginning with '0' is invalid in TOML (toml-test
+    // invalid/float/leading-zero{,-neg,-plus}).
+    {
+        var j = start;
+        while (j < raw.len and raw[j] != '.' and raw[j] != 'e' and raw[j] != 'E') : (j += 1) {}
+        const int_part = raw[start..j];
+        if (int_part.len > 1 and int_part[0] == '0') {
+            return raiseFloat(self, "leading zeros not allowed in float");
+        }
+    }
+
     var state: FloatState = .start;
     var i: usize = start;
     while (i < raw.len) : (i += 1) {
@@ -377,6 +390,20 @@ test "validateFloatFormat accepts grouped underscores" {
 test "validateFloatFormat accepts signed exponent" {
     try expectFloatAccept("6.022e+23");
     try expectFloatAccept("1.0e-10");
+}
+
+test "validateFloatFormat rejects leading zeros in integer part" {
+    try expectFloatReject("03.14");
+    try expectFloatReject("00.5");
+    try expectFloatReject("0_0.0");
+    // Signed variants (sign stripped before the check).
+    try expectFloatReject("-03.14");
+    try expectFloatReject("+03.14");
+    // But a single leading zero is fine.
+    try expectFloatAccept("0.14");
+    try expectFloatAccept("0.0");
+    try expectFloatAccept("0e0");
+    try expectFloatAccept("-0.0");
 }
 
 test "P-NEW-2 number fast-path correctness (with and without underscores)" {
