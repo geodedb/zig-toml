@@ -595,6 +595,36 @@ test "U-H deep nested inline tables rejected" {
     }
 }
 
+test "APP-02 deeply-dotted inline keys rejected, no stack overflow" {
+    const alloc = std.testing.allocator;
+    // Two sibling dotted keys far deeper than default max_depth force a
+    // mergeTables recursion that segfaulted before the fix. Default options.
+    const N = 5000;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(alloc);
+    try buf.appendSlice(alloc, "x = { ");
+    for (0..2) |dup| {
+        if (dup == 1) try buf.appendSlice(alloc, ", ");
+        for (0..N) |k| {
+            if (k != 0) try buf.append(alloc, '.');
+            try buf.append(alloc, 'a');
+        }
+        try buf.appendSlice(alloc, " = 1");
+    }
+    try buf.appendSlice(alloc, " }\n");
+
+    const result = parseWithError(alloc, buf.items, .{});
+    switch (result) {
+        .ok => |doc| {
+            doc.deinit();
+            try std.testing.expect(false); // must reject
+        },
+        .err => |e| {
+            try std.testing.expectEqual(ErrorCode.LimitExceeded, e.code);
+        },
+    }
+}
+
 test "APP-01 truncated datetime tokens error, never panic" {
     const alloc = std.testing.allocator;
     // Each crashed the parser with an out-of-bounds slice before the fix.

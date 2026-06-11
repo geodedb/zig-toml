@@ -360,13 +360,16 @@ pub const Parser = struct {
                 if (std.mem.indexOf(u8, text, ".")) |dot_pos| {
                     // Split into parts. Slices are arena-owned (P-5).
                     try path.append(alloc, text[0..dot_pos]);
+                    try self.checkKeyPathDepth(path.items.len);
                     var rest = text[dot_pos + 1 ..];
                     // Handle multiple dots (like 1.2.3)
                     while (std.mem.indexOf(u8, rest, ".")) |next_dot| {
                         try path.append(alloc, rest[0..next_dot]);
+                        try self.checkKeyPathDepth(path.items.len);
                         rest = rest[next_dot + 1 ..];
                     }
                     try path.append(alloc, rest);
+                    try self.checkKeyPathDepth(path.items.len);
                     self.current = try self.nextToken();
                     // Check if there's more path
                     if (self.current.tag == .dot) {
@@ -379,12 +382,26 @@ pub const Parser = struct {
 
             const key = try self.parseKey(alloc);
             try path.append(alloc, key);
+            try self.checkKeyPathDepth(path.items.len);
 
             if (self.current.tag == .dot) {
                 self.current = try self.nextToken();
             } else {
                 break;
             }
+        }
+    }
+
+    /// APP-02: bound dotted-key path length by max_depth. A path of length L
+    /// builds an (L-1)-deep nested-table chain and bounds the recursive
+    /// `inline_table.mergeTables` to <= L frames; capping L prevents a
+    /// stack-overflow DoS (a `max_depth` bypass, since `max_depth` only
+    /// constrained lexical nesting) and the associated unbounded arena
+    /// allocation. Default max_depth (128) is far below any stack limit.
+    fn checkKeyPathDepth(self: *Parser, len: usize) !void {
+        if (len > self.options.max_depth) {
+            self.parse_error = err.makeError(.LimitExceeded, self.current.pos, "dotted key path exceeds max nesting depth");
+            return error.ParseFailed;
         }
     }
 
