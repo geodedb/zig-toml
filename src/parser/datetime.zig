@@ -304,28 +304,28 @@ pub fn parseTimeLocal(self: *Parser, raw: []const u8) !val.TimeLocal {
 // Validators
 // ---------------------------------------------------------------------------
 
-pub fn isLeapYear(year: u16) bool {
+fn isLeapYear(year: u16) bool {
     return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0);
 }
 
-pub fn daysInMonth(year: u16, month: u8) u8 {
+fn daysInMonth(year: u16, month: u8) u8 {
     const days = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
     if (month < 1 or month > 12) return 0;
     if (month == 2 and isLeapYear(year)) return 29;
     return days[month - 1];
 }
 
-pub fn isValidDate(year: u16, month: u8, day: u8) bool {
+fn isValidDate(year: u16, month: u8, day: u8) bool {
     if (month < 1 or month > 12) return false;
     if (day < 1) return false;
     return day <= daysInMonth(year, month);
 }
 
-pub fn isValidTime(hour: u8, minute: u8, second: u8) bool {
+fn isValidTime(hour: u8, minute: u8, second: u8) bool {
     return hour <= 23 and minute <= 59 and second <= 59;
 }
 
-pub fn isValidOffset(offset_hour: i16, offset_minute: i16) bool {
+fn isValidOffset(offset_hour: i16, offset_minute: i16) bool {
     // Offset hours -23 to +23, minutes 0-59
     const abs_hour = if (offset_hour < 0) -offset_hour else offset_hour;
     return abs_hour <= 23 and offset_minute >= 0 and offset_minute <= 59;

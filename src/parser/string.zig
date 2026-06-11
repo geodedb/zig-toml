@@ -65,7 +65,7 @@ pub fn decodeMultilineLiteralString(self: *Parser, raw: []const u8) []const u8 {
     return content;
 }
 
-pub fn decodeEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]const u8 {
+fn decodeEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]const u8 {
     // Pre-size to the raw length; escape decoding only shrinks (or leaves
     // unchanged) the byte count, so this is a safe upper bound and avoids
     // the ArrayList doubling ladder entirely on the hot string path.
@@ -90,7 +90,7 @@ pub fn decodeEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]co
     return result.toOwnedSlice(alloc);
 }
 
-pub fn decodeMultilineEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]const u8 {
+fn decodeMultilineEscapes(self: *Parser, alloc: Allocator, content: []const u8) ![]const u8 {
     // Same upper-bound reasoning as decodeEscapes: output length <= input.
     var result: std.ArrayList(u8) = try .initCapacity(alloc, content.len);
 
@@ -131,7 +131,7 @@ pub fn decodeMultilineEscapes(self: *Parser, alloc: Allocator, content: []const 
     return result.toOwnedSlice(alloc);
 }
 
-pub fn decodeEscapeChar(self: *Parser, alloc: Allocator, content: []const u8, i: *usize, result: *std.ArrayList(u8)) !void {
+fn decodeEscapeChar(self: *Parser, alloc: Allocator, content: []const u8, i: *usize, result: *std.ArrayList(u8)) !void {
     const c = content[i.*];
     i.* += 1;
 

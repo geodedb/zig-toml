@@ -244,7 +244,7 @@ fn validateInlineTableV10Restrictions(
     }
 }
 
-pub fn mergeTables(alloc: Allocator, target: *Value, source: *Value) error{ ParseFailed, OutOfMemory }!void {
+fn mergeTables(alloc: Allocator, target: *Value, source: *Value) error{ ParseFailed, OutOfMemory }!void {
     // Both must be tables
     if (target.* != .table or source.* != .table) {
         return error.ParseFailed;
