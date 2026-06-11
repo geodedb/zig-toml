@@ -131,12 +131,15 @@ fn walkAndRun(allocator: std.mem.Allocator, subdir: []const u8, kind: CaseKind) 
 test "toml-test differential: valid corpus parses and matches golden JSON" {
     const allocator = std.testing.allocator;
     const n = try walkAndRun(allocator, corpus_root ++ "/valid", .valid);
-    // Pre-seed state: zero is acceptable; Task 5 onwards raises the floor.
-    std.debug.print("valid corpus: {d} cases\n", .{n});
+    // GAP-0024: std.debug.print writes to stderr, which the run-artifact
+    // driver flags as a "failed command" on every green run. Use std.log
+    // (suppressed at the default level) to keep the diagnostic without the
+    // spurious banner.
+    std.log.debug("valid corpus: {d} cases", .{n});
 }
 
 test "toml-test differential: invalid corpus is rejected" {
     const allocator = std.testing.allocator;
     const n = try walkAndRun(allocator, corpus_root ++ "/invalid", .invalid);
-    std.debug.print("invalid corpus: {d} cases\n", .{n});
+    std.log.debug("invalid corpus: {d} cases", .{n});
 }
