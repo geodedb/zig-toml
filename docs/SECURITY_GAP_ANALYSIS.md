@@ -1,5 +1,27 @@
 # Security Gap Analysis
 
+## 2026-06-11 appsec review + closure
+
+A fresh OWASP-2025/CIS-v8.1.2 appsec review (full report:
+`docs/APPSEC_REVIEW_2026-06-11.md`) ran against current `main`. The prior
+S-* findings were re-verified: the parser caps (`max_bytes`, `max_keys`,
+`max_values`, `max_depth`) are all present and charged; the encoder
+`unreachable` sites are gone; the legacy global pool is deprecated. Two
+NEW, reproduced crashes were found and fixed this iteration; two Low items
+were recorded.
+
+| ID | Severity | Title | Status |
+|----|----------|-------|--------|
+| APP-01 | Medium | OOB slice on truncated datetime tokens (panic / OOB read) | **Fixed** (commit `6d263ab`) -- length guards in `parseDateParts`/`parseTimeParts`; regression test in `src/toml.zig` |
+| APP-02 | Medium | `mergeTables` unbounded recursion bypasses `max_depth` (stack overflow) | **Fixed** (commit `e5bcb37`) -- dotted-key path depth capped at `max_depth` in `parseKeyPath` |
+| APP-03 | Low | Deprecated legacy global pool retains documented UAF/race | **Open (by design)** -- not attacker-reachable; slated for removal in 0.3.0 |
+| APP-04 | Low | Batch `parseDocuments` fans caller allocator across threads | **Closed (doc)** -- thread-safe-allocator requirement now documented on the public `parseDocuments` signature (`src/parallel.zig`) |
+
+Related correctness fix (found via the full toml-test corpus, not the
+appsec pass): the parser accepted invalid floats with leading zeros
+(`03.14`); now rejected. This was an input-validation gap though not
+exploitable.
+
 **Last updated:** 2026-04-19 (Phase 7 closure batch — S-13, S-15 code-closed)
 **Project:** devnw/zig/toml
 **Phase:** 7 -- encoder unreachable hardening + fuzz coverage expansion landed

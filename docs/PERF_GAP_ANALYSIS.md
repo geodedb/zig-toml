@@ -1,5 +1,31 @@
 # Performance Gap Analysis
 
+## 2026-06-11 audit closure
+
+A fresh perf review (bench harness now exists under `bench/`) verified the
+previously-"open" findings against current `main`. **Most were already
+resolved**: P-1 (O(n^2) grow -> StringArrayHashMap/ArrayList), P-5 (dupe
+
++ UAF), P-7 (global pool), P-8 (shadow parser), P-10 (array-of-pointers),
+P-12 (inline dup-check), P-16 (strict-path UTF-8 double-pass) are all gone
+in current code. Of the rest:
+
++ **P-NEW-2** -- underscore-free int/float literals skip the scratch alloc.
+  **Closed** (commit `21e0f20`). Measured impact within noise on the current
+  corpus (less numeric-heavy than estimated); kept as an allocation-reducing
+  cleanup, not a headline speedup.
++ **P-NEW-4** -- duplicate-key insert uses one `getOrPut` probe instead of
+  contains+put. **Closed** (commit `700485c`).
++ **P-NEW-5 / P-16(recover)** -- the recover-mode UTF-8 pre-pass is a
+  **deliberate terminal-condition guard**, not redundant work (removing it
+  changes recover semantics). **Won't-fix**; left intact.
++ **P-15** -- residual ~3x throughput gap. **Open, needs-profiling** -- real
+  but hotspot attribution requires a flamegraph not produced here.
++ **P-NEW-1** (per-key 128B `path` ArrayList), **P-NEW-3** (array element
+  double-alloc), **P-NEW-6** (JSON emitter stack frame). **Open** -- invasive
+  allocator restructures deferred to a focused perf plan; P-NEW-1's claimed
+  25-40% memory cut was not reproduced on `parse_large` (delta ~1.5KB).
+
 Last updated: 2026-04-19 (Phase 3 reconciliation: P-2 closed; P-8 rescoped; P-15/P-16 added)
 
 Source: Phase 3 perf review (13 findings) -> Phase 4 scoring + issue tracking -> Phase 3 benchmark-driven reconciliation (adds P-15, P-16; closes P-2).
@@ -8,11 +34,11 @@ Source: Phase 3 perf review (13 findings) -> Phase 4 scoring + issue tracking ->
 
 **Phase 3 reconciliation (2026-04-19):**
 
-- **P-2 closed** as resolved. Post P-3/P-4/P-13 the hot-path table lookups all use `StringArrayHashMap` (O(1)) -- linear `std.mem.eql` scans no longer exist in the cited code. Evidence: `src/parser/table_path.zig:46`, `src/parser/inline_table.zig:157,174`, `src/value.zig:162-169`. Issue #30 closed with note.
-- **P-8 rescoped** to bench-harness note. `parallel_parse` n4 = 236 us vs `parse_small` 90 us ~= 2.6x (not 4x); extra ~146 us is thread-spawn overhead, not a parser bug. Do not invest in parallel perf until single-thread > 80 MB/s. The UTF-8 fold-in aspect of original P-8 is now tracked as P-16 for ranked visibility.
-- **P-14 rejected** (not opened). `renderKeyPath` is already gated by `if (self.sink == .events)` at `src/parser.zig:248` with one call site. Phase 2 candidate was based on mis-reading `events_sink.zig` in isolation.
-- **P-15 added** (new, priority::high). `parse_large` ~32 MB/s is 3x below typical hand-written TOML parsers. Lexer branch structure + per-token UTF-8 decoding are primary suspects. PerfScore pending flamegraph.
-- **P-16 added** (new, priority::medium). UTF-8 validation double-pass (parser preamble + lexer). Secondary suspect for 3x gap. PerfScore pending flamegraph.
++ **P-2 closed** as resolved. Post P-3/P-4/P-13 the hot-path table lookups all use `StringArrayHashMap` (O(1)) -- linear `std.mem.eql` scans no longer exist in the cited code. Evidence: `src/parser/table_path.zig:46`, `src/parser/inline_table.zig:157,174`, `src/value.zig:162-169`. Issue #30 closed with note.
++ **P-8 rescoped** to bench-harness note. `parallel_parse` n4 = 236 us vs `parse_small` 90 us ~= 2.6x (not 4x); extra ~146 us is thread-spawn overhead, not a parser bug. Do not invest in parallel perf until single-thread > 80 MB/s. The UTF-8 fold-in aspect of original P-8 is now tracked as P-16 for ranked visibility.
++ **P-14 rejected** (not opened). `renderKeyPath` is already gated by `if (self.sink == .events)` at `src/parser.zig:248` with one call site. Phase 2 candidate was based on mis-reading `events_sink.zig` in isolation.
++ **P-15 added** (new, priority::high). `parse_large` ~32 MB/s is 3x below typical hand-written TOML parsers. Lexer branch structure + per-token UTF-8 decoding are primary suspects. PerfScore pending flamegraph.
++ **P-16 added** (new, priority::medium). UTF-8 validation double-pass (parser preamble + lexer). Secondary suspect for 3x gap. PerfScore pending flamegraph.
 
 Scoring formula: `PerfScore = (severity_weight * frequency * blast_radius) / effort_estimate`
 Severity weights: P0=10, P1=7, P2=4, P3=2. Frequency / blast / effort on 1-5 scales.
@@ -65,29 +91,29 @@ Severity weights: P0=10, P1=7, P2=4, P3=2. Frequency / blast / effort on 1-5 sca
 
 ### parser (src/parser.zig)
 
-- **#31** -- ArrayList capacity=0 across 9 sites (quick win). [P1] -- **Closed** commit `f92ad8b`.
-- **#34** -- Redundant dupe on arena-owned bytes + latent UAF in bare-key. [P1, correctness]
-- **#37** -- `parallel.parseDocument` is a toy; route to real parser. [P1, cross-cuts parallel]
-- Folded into umbrella **#40**: P-8 (lexer UTF-8 fold-in), P-11 (stack buffers), P-12 (inline-table dup O(n^2)), P-13 (escape decoder list -- **Closed** commit `f92ad8b` via P-4 pass).
++ **#31** -- ArrayList capacity=0 across 9 sites (quick win). [P1] -- **Closed** commit `f92ad8b`.
++ **#34** -- Redundant dupe on arena-owned bytes + latent UAF in bare-key. [P1, correctness]
++ **#37** -- `parallel.parseDocument` is a toy; route to real parser. [P1, cross-cuts parallel]
++ Folded into umbrella **#40**: P-8 (lexer UTF-8 fold-in), P-11 (stack buffers), P-12 (inline-table dup O(n^2)), P-13 (escape decoder list -- **Closed** commit `f92ad8b` via P-4 pass).
 
 ### value-model (src/value.zig)
 
-- **#28** -- O(n^2) grow via alloc+memcpy on every insert. [P0]
-- **#30** -- Linear `std.mem.eql` scans; folds into #28 via hash-map. [P0]
-- Folded into umbrella **#40**: P-10 (array-of-pointers cache layout).
++ **#28** -- O(n^2) grow via alloc+memcpy on every insert. [P0]
++ **#30** -- Linear `std.mem.eql` scans; folds into #28 via hash-map. [P0]
++ Folded into umbrella **#40**: P-10 (array-of-pointers cache layout).
 
 ### parallel (src/parallel.zig)
 
-- **#27** -- MAX_CHUNKS=64 drops inputs (correctness + perf). [P0] -- **Closed** commit `037a918`.
-- **#37** -- toy `parseDocument`. [P1]
-- Folded into umbrella **#40**: P-7 (global pool allocator/API).
++ **#27** -- MAX_CHUNKS=64 drops inputs (correctness + perf). [P0] -- **Closed** commit `037a918`.
++ **#37** -- toy `parseDocument`. [P1]
++ Folded into umbrella **#40**: P-7 (global pool allocator/API).
 
 ### lexer / json-output / infra
 
-- **#59** -- **P-15** Lexer hot-path review for 3x throughput gap (`parse_large` ~32 MB/s). [P1, confidence::suspected]
-- **#61** -- **P-16** UTF-8 validation potential double-pass (fold into lexer). [P2, confidence::suspected; also tracked as P-8 checkbox in #40]
-- Folded into umbrella **#40**: P-8 (lexer -- now duplicated by #61 for ranked visibility), P-9 (json-tagged unsorted emit / O(n^2) sort -- **Closed** commit `87e7099`).
-- Benchmark harness (prerequisite to quantify all numbers above): tracked in existing issue **#3**.
++ **#59** -- **P-15** Lexer hot-path review for 3x throughput gap (`parse_large` ~32 MB/s). [P1, confidence::suspected]
++ **#61** -- **P-16** UTF-8 validation potential double-pass (fold into lexer). [P2, confidence::suspected; also tracked as P-8 checkbox in #40]
++ Folded into umbrella **#40**: P-8 (lexer -- now duplicated by #61 for ranked visibility), P-9 (json-tagged unsorted emit / O(n^2) sort -- **Closed** commit `87e7099`).
++ Benchmark harness (prerequisite to quantify all numbers above): tracked in existing issue **#3**.
 
 ---
 
@@ -95,32 +121,32 @@ Severity weights: P0=10, P1=7, P2=4, P3=2. Frequency / blast / effort on 1-5 sca
 
 ### Quick wins (< 1 day)
 
-- **#31** -- `ArrayList.initCapacity(...)` everywhere. **Closed** commit `f92ad8b`.
-- **#27** -- `chunk_size` ceiling-divide fix. **Closed** commit `037a918`.
-- **#40 / P-9** -- always-sort JSON emit with heap slice. **Closed** commit `87e7099`.
-- **#40 / P-13** -- escape decoder `initCapacity`. **Closed** commit `f92ad8b` (folded into P-4 pass).
++ **#31** -- `ArrayList.initCapacity(...)` everywhere. **Closed** commit `f92ad8b`.
++ **#27** -- `chunk_size` ceiling-divide fix. **Closed** commit `037a918`.
++ **#40 / P-9** -- always-sort JSON emit with heap slice. **Closed** commit `87e7099`.
++ **#40 / P-13** -- escape decoder `initCapacity`. **Closed** commit `f92ad8b` (folded into P-4 pass).
 
 ### Medium (1-5 days)
 
-- **#34** -- Ownership-invariant audit + bare-key UAF fix.
-- **#37** -- Wire `parallel.parseDocument` to real parser; per-worker arena.
-- **#40 / P-7** -- Rework global pool: allocator param, no panic, double-checked init.
-- **#40 / P-8** -- Fold UTF-8 validation into lexer.
++ **#34** -- Ownership-invariant audit + bare-key UAF fix.
++ **#37** -- Wire `parallel.parseDocument` to real parser; per-worker arena.
++ **#40 / P-7** -- Rework global pool: allocator param, no panic, double-checked init.
++ **#40 / P-8** -- Fold UTF-8 validation into lexer.
 
 ### Strategic (> 5 days)
 
-- **#28** -- Value-model refactor to ArrayListUnmanaged + insertion-order preserving index. (P-2/#30 closed -- hash-map lookup already in place; remaining work is the quadratic-grow fix.)
-- **#59 (P-15)** -- Lexer hot-path refactor for single-thread 80+ MB/s: dispatch-table or SIMD-classified character categories. **Prerequisite**: flamegraph from `perf record -g -- zig build bench-parse_large`.
-- **#61 (P-16)** -- Fuse UTF-8 validation into lexer pass (if confirmed as material hotspot).
-- **#40 / P-10** -- MultiArrayList / struct-of-arrays for `Value` variants. Big win for cache, large refactor.
-- **#3** (existing) -- Stand up the benchmark harness so every item above has a measured before/after.
++ **#28** -- Value-model refactor to ArrayListUnmanaged + insertion-order preserving index. (P-2/#30 closed -- hash-map lookup already in place; remaining work is the quadratic-grow fix.)
++ **#59 (P-15)** -- Lexer hot-path refactor for single-thread 80+ MB/s: dispatch-table or SIMD-classified character categories. **Prerequisite**: flamegraph from `perf record -g -- zig build bench-parse_large`.
++ **#61 (P-16)** -- Fuse UTF-8 validation into lexer pass (if confirmed as material hotspot).
++ **#40 / P-10** -- MultiArrayList / struct-of-arrays for `Value` variants. Big win for cache, large refactor.
++ **#3** (existing) -- Stand up the benchmark harness so every item above has a measured before/after.
 
 ---
 
 ## Unknowns / Blockers
 
-- **Flamegraph tooling gap (P-15/P-16).** Install `hyperfine`; ensure `perf record -g` is accessible (may require `/proc/sys/kernel/perf_event_paranoid <= 1`). Without a flamegraph on `bench-parse_large`, ranking P-15 vs P-16 is speculation. PerfScore for both is "pending" until profiler attribution lands.
-- **No benchmarks** (pre-P-15 context). Every percent-improvement above is an evidence-anchored estimate, not a measurement. Priority: close **#3** (benchmark suite) before merging large refactors so PRs include measured deltas.
-- **parseKey bare-key UAF** (#34) needs an explicit repro test: input freed before Document, assert bare-key string still valid. Confirm via `-fsanitize=address`.
-- **P-3 data loss** (#27) has no test coverage today; add a `parallel_coverage_test.zig` with `inputs.len >= 65` as part of the fix PR.
-- **Value-model refactor** (#28/#30) will interact with json_tagged deterministic-order requirement (#40 / P-9); fix P-9 first or in the same change set so regression tests stay meaningful.
++ **Flamegraph tooling gap (P-15/P-16).** Install `hyperfine`; ensure `perf record -g` is accessible (may require `/proc/sys/kernel/perf_event_paranoid <= 1`). Without a flamegraph on `bench-parse_large`, ranking P-15 vs P-16 is speculation. PerfScore for both is "pending" until profiler attribution lands.
++ **No benchmarks** (pre-P-15 context). Every percent-improvement above is an evidence-anchored estimate, not a measurement. Priority: close **#3** (benchmark suite) before merging large refactors so PRs include measured deltas.
++ **parseKey bare-key UAF** (#34) needs an explicit repro test: input freed before Document, assert bare-key string still valid. Confirm via `-fsanitize=address`.
++ **P-3 data loss** (#27) has no test coverage today; add a `parallel_coverage_test.zig` with `inputs.len >= 65` as part of the fix PR.
++ **Value-model refactor** (#28/#30) will interact with json_tagged deterministic-order requirement (#40 / P-9); fix P-9 first or in the same change set so regression tests stay meaningful.

@@ -1,17 +1,54 @@
 # Gap Analysis
 
 Generated: 2026-04-18 (Phase 4 of audit)
-Last updated: 2026-04-19 (Phase 7 closure batch: GAP-0023 closed -- commit `e670231`)
+Last updated: 2026-06-11 (fresh audit + closure: verified every "open" gap
+against current code; closed GAP-0004/0018/0019/0024 and reclassified
+GAP-0001/0009/0012/0013/0014/0022 as already-satisfied; +2 new conformance
+gaps found by running the full toml-test v1.1.0 corpus)
 Platform: GitLab (`gitlab.com/devnw/zig/toml`)
 Source of truth: GitLab issue tracker. This file mirrors the tracker for open gaps.
 
-Catalog: originally 21 open gaps; +3 new (0022/0023/0024) in 2026-04-19 audit. Post-closure status:
+## 2026-06-11 audit closure
+
+A fresh audit re-verified all 10 previously-"open" gaps against current
+`main`. Most were already satisfied by code shipped since 2026-04-19; the
+rest were closed this iteration.
+
+**Closed this iteration (code/CI landed):**
+
+- **GAP-0024** -- spurious `failed command` test banner removed (commit `c3930fc`).
+- **GAP-0004** -- toml-test decoder conformance now ENFORCED (`allow_failure:
+  false`) at `-toml 1.1.0`, the version the library targets, skipping the one
+  known feature gap (`valid/key/unicode`). Commit `0e8b501`. Encoder direction
+  stays monitored pending GAP-0030 (below).
+- **GAP-0018 / GAP-0019** -- Windows + macOS cross-compile CI jobs added
+  (`build-windows`, `build-macos`); both targets compile clean. Commit `43ba691`.
+
+**Already satisfied (code shipped earlier; treat as resolved):**
+
+- **GAP-0001** -- `parallel.parseDocument` now calls `toml.parseWithError`
+  (`src/parallel.zig:485`); invalid TOML rejected; `key_count` from the tree.
+- **GAP-0009/0012/0013/0014/0022** -- the v1.2.0 mutation/iteration/typed-accessor
+  API is implemented (`src/value.zig`), re-exported (`src/toml.zig:18-39`),
+  documented, and tested (`tests/api_v1_2.zig`, green).
+
+**New gaps found this audit (running the full upstream corpus):**
+
+- **GAP-0029** -- TOML 1.1 Unicode bare keys unsupported. The lexer rejects
+  `€ = 'x'` (toml-test `valid/key/unicode`). Severity: Medium (1.1 feature gap).
+- **GAP-0030** -- Encoder conformance: ~26 `toml-test -encoder` failures at
+  `-toml 1.1.0` (escapes, inline tables, dotted keys, datetimes, unicode keys).
+  Severity: High (correctness gaps in a shipped feature). Blocks flipping the
+  encoder conformance gate to enforced.
+
+Catalog (historical, pre-2026-06-11): originally 21 open gaps; +3
+(0022/0023/0024) in 2026-04-19. Post-closure status:
 
 - Fully closed: GAP-0002, GAP-0003, GAP-0005, GAP-0006, GAP-0007,
   GAP-0008, GAP-0010, GAP-0011, GAP-0015, GAP-0016, GAP-0017,
   GAP-0020, GAP-0021, GAP-0023
-- Still open: 10 items (GAP-0001, 0004, 0009, 0012, 0013, 0014,
-  0018, 0019, 0022, 0024)
+- Closed 2026-06-11: GAP-0001, 0004, 0009, 0012, 0013, 0014, 0018, 0019, 0022, 0024
+- Open after 2026-06-11: GAP-0029 (Unicode bare keys), GAP-0030 (encoder conformance)
 Resolved items live in `docs/GAP_ANALYSIS_RESOLVED.md`.
 
 ## Gaps

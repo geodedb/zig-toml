@@ -1,5 +1,24 @@
 # Quality Gap Analysis
 
+## 2026-06-11 audit closure
+
+A fresh quality review verified the 12 previously-"open" findings against
+current `main`. **Nine were already resolved** by code shipped since
+2026-04-19 (Q-1 parallel shadow parser, Q-2 validateDocument grammar, Q-3
+structural test asserts, Q-4 pool UAF/@panic, Q-5 datetime parsers, Q-6
+int/float nesting, Q-7 parseInlineTable, Q-12 Document-by-pointer, Q-13
+toml-test corpus). Of the rest:
+
+- **Q-23** -- 9 internal-only `pub` helpers narrowed to file-private.
+  **Closed** (commit `0882ce1`).
+- **Q-NEW-1** -- version/CHANGELOG drift (API.md said 0.2.0 vs zon 0.1.4;
+  missing released tags). **Closed** (commit `7215601`) + a `docs_hygiene_test`
+  guard that asserts the zon version always has a CHANGELOG heading.
+- **Q-21** -- `src/schema.zig` 1199 LOC. **Open (low)** -- internals are clean
+  (dispatcher + small validators); split is a nicety, deferred.
+- **Q-NEW-2** -- `parseInlineTableBody` ~132 LOC / depth-5. **Open (low,
+  cosmetic)** -- deferred.
+
 Last updated: 2026-04-19 (Phase 7 closure batch: Q-19, Q-20, Q-22 closed)
 
 Source: Phase 3 quality-reviewer output (23 findings: 18 original + Q-19..Q-23 from 2026-04-19 re-scan). Scoring formula:

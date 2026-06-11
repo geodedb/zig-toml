@@ -443,7 +443,13 @@ fn parseSequentialOne(
 /// failure instead of @panicking.
 ///
 /// Parameters:
-/// - allocator: Memory allocator for parsing
+/// - allocator: Memory allocator for parsing. **Must be thread-safe.**
+///   For 4+ inputs this function fans the work across worker threads,
+///   each of which calls `allocator` concurrently (APP-04). Pass a
+///   thread-safe allocator (e.g. `std.heap.smp_allocator`, or a GPA with
+///   `.thread_safe = true`); a bare `ArenaAllocator` or non-thread-safe
+///   GPA will race. The internal `validateDocuments`/`extractKeys` paths
+///   use private per-chunk arenas and do not share the caller allocator.
 /// - inputs: Array of TOML document strings
 /// - results: Array to store parsing results
 ///
