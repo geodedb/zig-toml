@@ -294,9 +294,12 @@ conformance-decoder:
 # Mirrors conformance-decoder but drives the encoder binary via
 # `toml-test -encoder`, which feeds the binary tagged-JSON on stdin
 # and expects TOML on stdout. Runs the v1.1.0 corpus to match the
-# library's default. Still `allow_failure: true`: the encoder has ~26
-# open conformance failures at v1.1.0 (tracked as an open gap --
-# encoder conformance). Flip to `false` once that gap is closed.
+# library's default. ENFORCED (allow_failure: false): the encoder passes
+# all 182 verifiable cases. The five `-skip`ped cases are toml-test
+# harness limitations -- its own embedded reference decoder cannot parse
+# its own TOML-1.1 expected files (no-seconds times, multiline inline
+# tables, Unicode keys, `\e`/`\xHH` escapes), reported as "BUG IN TEST
+# CASE", not encoder defects.
 conformance-encoder:
   stage: test
   image: golang:1.22-bookworm
@@ -309,7 +312,14 @@ conformance-encoder:
     - zig build --release=safe
     - test -x zig-out/bin/toml-test-encoder
     - set -o pipefail
-    - toml-test -toml 1.1.0 -encoder ./zig-out/bin/toml-test-encoder 2>&1 | tee conformance-encoder.log
+    - >-
+      toml-test -toml 1.1.0 -encoder
+      -skip 'valid/datetime/no-seconds'
+      -skip 'valid/inline-table/newline'
+      -skip 'valid/key/unicode'
+      -skip 'valid/string/escape-esc'
+      -skip 'valid/string/hex-escape'
+      ./zig-out/bin/toml-test-encoder 2>&1 | tee conformance-encoder.log
     - |
       if ! grep -qE "passed,[[:space:]]+[0-9]+[[:space:]]+failed" conformance-encoder.log; then
         echo "CONFORMANCE GATE: no summary line -- runner aborted early." >&2
@@ -320,7 +330,7 @@ conformance-encoder:
     paths:
       - conformance-encoder.log
     expire_in: 1 month
-  allow_failure: true
+  allow_failure: false
   needs:
     - build
 
