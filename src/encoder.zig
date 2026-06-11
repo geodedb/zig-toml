@@ -234,7 +234,11 @@ fn writeBasicString(s: []const u8, writer: anytype) !void {
             0x08 => try writer.writeAll("\\b"),
             0x0C => try writer.writeAll("\\f"),
             else => {
-                if (c < 0x20) {
+                // TOML requires the control characters U+0000–U+0008,
+                // U+000A–U+001F, and U+007F (DEL) to be escaped in basic
+                // strings. The named escapes above cover \b/\t/\n/\f/\r;
+                // everything else in those ranges is emitted as \uXXXX.
+                if (c < 0x20 or c == 0x7f) {
                     try writer.print("\\u{x:0>4}", .{c});
                 } else {
                     try writer.writeByte(c);
@@ -431,6 +435,25 @@ test "encode string values with escapes" {
         "quote = \"say \\\"hi\\\"\"\n" ++
         "tab = \"a\\tb\"\n";
     try std.testing.expectEqualStrings(expected, aw.written());
+}
+
+test "encode escapes DEL (U+007F) control character" {
+    const parser_mod = @import("parser.zig");
+    // A basic string containing a literal DEL (0x7f) must be emitted as
+    // an escaped sequence, not a raw control byte (toml-test
+    // valid/string/escapes, valid/key/quoted-unicode).
+    const input = "k = \"a\\u007Fb\"\n";
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try encode(doc, &aw.writer, .{});
+    // Output must contain the escaped form and NOT a raw 0x7f byte.
+    try std.testing.expectEqualStrings("k = \"a\\u007fb\"\n", aw.written());
+    try std.testing.expect(std.mem.indexOfScalar(u8, aw.written(), 0x7f) == null);
 }
 
 test "encode datetime values delegate to Value format methods" {
