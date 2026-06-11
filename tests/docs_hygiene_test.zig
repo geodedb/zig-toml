@@ -159,10 +159,12 @@ test "CHANGELOG documents the current build.zig.zon version (Q-NEW-1)" {
     const zon = try readFile(allocator, "build.zig.zon");
     defer allocator.free(zon);
 
-    // Extract the value of `.version = "X.Y.Z"`.
-    const marker = ".version = \"";
+    // Extract the value of the top-level `.version = "X.Y.Z"`. Anchor to
+    // the 4-space top-level indent so a future dependency carrying its own
+    // (more deeply indented) `.version` field cannot shift the match.
+    const marker = "\n    .version = \"";
     const vstart = (std.mem.indexOf(u8, zon, marker) orelse {
-        std.debug.print("no .version in build.zig.zon\n", .{});
+        std.debug.print("no top-level .version in build.zig.zon\n", .{});
         return error.TestUnexpectedResult;
     }) + marker.len;
     const vend = std.mem.indexOfScalarPos(u8, zon, vstart, '"') orelse {
