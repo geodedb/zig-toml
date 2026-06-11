@@ -155,14 +155,19 @@ fn writeHeaderPath(parts: []const []const u8, writer: anytype) !void {
     }
 }
 
-/// Owned snapshot of a table's entries, optionally sorted. The slice
-/// may point into a thread-local stack buffer or into the smp heap.
+/// Owned snapshot of a table's entries, optionally sorted.
+///
+/// The snapshot is heap-allocated per call. An earlier version reused a
+/// single `threadlocal` stack buffer to avoid the allocation, but
+/// `writeTableBody` recurses into nested tables and each recursive
+/// `sortedCopy` clobbered the parent's buffer -- the parent loop then read
+/// a grandchild entry and emitted a spurious duplicate table header
+/// (GAP-0030, toml-test valid/table/sub). Correctness requires each call
+/// to own its slice for the lifetime of its loop; the encoder is not on
+/// the parse hot path, so the per-table allocation is acceptable.
 const SortedEntries = struct {
     slice: []TableEntry,
-    is_heap: bool,
 };
-
-threadlocal var sort_stack_buf: [256]TableEntry = undefined;
 
 fn sortedCopy(table: *const Value, options: EncodeOptions) !SortedEntries {
     std.debug.assert(table.* == .table);
@@ -170,24 +175,16 @@ fn sortedCopy(table: *const Value, options: EncodeOptions) !SortedEntries {
     const keys = table.table.map.keys();
     const values = table.table.map.values();
 
-    if (n <= sort_stack_buf.len) {
-        for (0..n) |i| {
-            sort_stack_buf[i] = .{ .key = keys[i], .value = values[i] };
-        }
-        const slice = sort_stack_buf[0..n];
-        if (options.sort_keys) std.sort.pdq(TableEntry, slice, {}, entryLessThan);
-        return .{ .slice = slice, .is_heap = false };
-    }
     const buf = try std.heap.smp_allocator.alloc(TableEntry, n);
     for (0..n) |i| {
         buf[i] = .{ .key = keys[i], .value = values[i] };
     }
     if (options.sort_keys) std.sort.pdq(TableEntry, buf, {}, entryLessThan);
-    return .{ .slice = buf, .is_heap = true };
+    return .{ .slice = buf };
 }
 
 fn freeIfHeap(sorted: SortedEntries) void {
-    if (sorted.is_heap) std.heap.smp_allocator.free(sorted.slice);
+    std.heap.smp_allocator.free(sorted.slice);
 }
 
 fn entryLessThan(_: void, a: TableEntry, b: TableEntry) bool {
@@ -454,6 +451,43 @@ test "encode escapes DEL (U+007F) control character" {
     // Output must contain the escaped form and NOT a raw 0x7f byte.
     try std.testing.expectEqualStrings("k = \"a\\u007fb\"\n", aw.written());
     try std.testing.expect(std.mem.indexOfScalar(u8, aw.written(), 0x7f) == null);
+}
+
+test "encode nested tables do not alias the sort buffer (GAP-0030)" {
+    const parser_mod = @import("parser.zig");
+    // Regression: sortedCopy used a single shared threadlocal buffer that
+    // recursive writeTableBody calls clobbered, making the parent loop read
+    // a grandchild and emit a spurious [a.more]. (toml-test valid/table/sub)
+    const input =
+        \\[a]
+        \\key = 1
+        \\[a.extend]
+        \\key = 2
+        \\[a.extend.more]
+        \\key = 3
+        \\
+    ;
+    var parser = parser_mod.Parser.init(std.testing.allocator, input, .{});
+    const doc = try parser.parse();
+    defer doc.deinit();
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try encode(doc, &aw.writer, .{});
+
+    const out = aw.written();
+    // The correct deep path must appear exactly once; the aliased duplicate
+    // [a.more] must not appear at all.
+    try std.testing.expect(std.mem.indexOf(u8, out, "[a.extend.more]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "[a.more]") == null);
+
+    // And it must round-trip: re-parse and check the value lives at a.extend.more.
+    var p2 = parser_mod.Parser.init(std.testing.allocator, out, .{});
+    const doc2 = try p2.parse();
+    defer doc2.deinit();
+    const more = doc2.root.get("a").?.get("extend").?.get("more").?;
+    try std.testing.expectEqual(@as(i64, 3), more.get("key").?.integer);
+    try std.testing.expect(doc2.root.get("a").?.get("more") == null);
 }
 
 test "encode datetime values delegate to Value format methods" {
