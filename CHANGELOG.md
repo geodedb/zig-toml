@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.5] - 2026-06-11
+## [0.1.6] - 2026-06-11
 
 ### Added
 
@@ -108,6 +108,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocation (P-NEW-2); duplicate-key insertion uses a single `getOrPut`
   probe (P-NEW-4). Nine internal-only parser helpers are no longer `pub`
   (Q-23).
+
+## [0.1.5] - 2026-06-11
+
+### Changed
+
+- Diamond-dependency sync: converge `thread_pool` onto its `v0.2.5` tag
+  (GAP-0838). Released in parallel with the 0.1.6 audit-closure work; this
+  tag carries only the dependency convergence. No library API or behavior
+  changes.
 
 ## [0.1.4] - 2026-05-02
 

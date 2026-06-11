@@ -118,6 +118,7 @@ test "CHANGELOG mentions every released tag" {
         "[0.1.3]",
         "[0.1.4]",
         "[0.1.5]",
+        "[0.1.6]",
         "[0.2.0]",
     };
     for (required_tags) |tag| {
@@ -143,6 +144,7 @@ test "CHANGELOG release dates match git history" {
         "## [0.1.3] - 2026-05-02",
         "## [0.1.4] - 2026-05-02",
         "## [0.1.5] - 2026-06-11",
+        "## [0.1.6] - 2026-06-11",
         "## [0.2.0] - 2026-04-18",
     };
     for (required) |needle| {
