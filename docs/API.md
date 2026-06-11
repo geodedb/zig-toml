@@ -1,8 +1,8 @@
 # TOML Parser API Reference
 
-**Library Version:** 0.2.0
+**Library Version:** 0.1.4
 **TOML Versions:** v1.0.0, v1.1.0
-**Last Updated:** 2025-01-24
+**Last Updated:** 2026-06-11
 
 ## Overview
 

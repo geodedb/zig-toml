@@ -108,12 +108,15 @@ test "CHANGELOG mentions every released tag" {
     defer allocator.free(body);
 
     // Every git tag in this repo must have a heading in the changelog.
-    // Keep this array in sync with `git tag -l`. 0.2.0 is the current
-    // in-flight release target documented in the file; it will be
-    // tagged after this plan lands.
+    // Keep this array in sync with `git tag -l`. 0.2.0 is a documented
+    // in-flight feature target (not yet tagged); 0.1.2/0.1.3/0.1.4 are the
+    // released sibling-dependency patch bumps (Q-NEW-1 reconciliation).
     const required_tags = [_][]const u8{
         "[0.1.0]",
         "[0.1.1]",
+        "[0.1.2]",
+        "[0.1.3]",
+        "[0.1.4]",
         "[0.2.0]",
     };
     for (required_tags) |tag| {
@@ -129,12 +132,15 @@ test "CHANGELOG release dates match git history" {
     const body = try readFile(allocator, CHANGELOG_PATH);
     defer allocator.free(body);
 
-    // v0.1.0 was tagged 2026-01-24; v0.1.1 was tagged 2026-01-26.
-    // 0.2.0 is dated 2026-04-18 in the changelog (in-flight release
-    // target tracked before the tag is cut).
+    // v0.1.0 was tagged 2026-01-24; v0.1.1 2026-01-26; v0.1.2/0.1.3/0.1.4
+    // were all tagged 2026-05-02 (sibling-dep patch bumps). 0.2.0 is dated
+    // 2026-04-18 in the changelog (in-flight feature target, not yet cut).
     const required = [_][]const u8{
         "## [0.1.0] - 2026-01-24",
         "## [0.1.1] - 2026-01-26",
+        "## [0.1.2] - 2026-05-02",
+        "## [0.1.3] - 2026-05-02",
+        "## [0.1.4] - 2026-05-02",
         "## [0.2.0] - 2026-04-18",
     };
     for (required) |needle| {
@@ -142,6 +148,36 @@ test "CHANGELOG release dates match git history" {
             std.debug.print("missing '{s}' in {s}\n", .{ needle, CHANGELOG_PATH });
             try std.testing.expect(false);
         }
+    }
+}
+
+test "CHANGELOG documents the current build.zig.zon version (Q-NEW-1)" {
+    // Drift guard: whatever version build.zig.zon declares MUST have a
+    // matching `## [<version>]` heading in the changelog. This is the
+    // check that would have caught the API.md/CHANGELOG vs zon drift.
+    const allocator = std.testing.allocator;
+    const zon = try readFile(allocator, "build.zig.zon");
+    defer allocator.free(zon);
+
+    // Extract the value of `.version = "X.Y.Z"`.
+    const marker = ".version = \"";
+    const vstart = (std.mem.indexOf(u8, zon, marker) orelse {
+        std.debug.print("no .version in build.zig.zon\n", .{});
+        return error.TestUnexpectedResult;
+    }) + marker.len;
+    const vend = std.mem.indexOfScalarPos(u8, zon, vstart, '"') orelse {
+        return error.TestUnexpectedResult;
+    };
+    const version = zon[vstart..vend];
+
+    const body = try readFile(allocator, CHANGELOG_PATH);
+    defer allocator.free(body);
+
+    var heading_buf: [64]u8 = undefined;
+    const heading = std.fmt.bufPrint(&heading_buf, "## [{s}]", .{version}) catch unreachable;
+    if (std.mem.indexOf(u8, body, heading) == null) {
+        std.debug.print("build.zig.zon version {s} has no '{s}' heading in {s}\n", .{ version, heading, CHANGELOG_PATH });
+        try std.testing.expect(false);
     }
 }
 

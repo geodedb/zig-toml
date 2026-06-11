@@ -79,6 +79,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and iterator types at the package root. External consumer-perspective
   coverage lives in `tests/api_v1_2.zig`. Closes GAP-0022.
 
+### Security
+
+- Bounds-guard truncated datetime/local-datetime literals in
+  `parseDateParts`/`parseTimeParts`. A short token such as `1234-12:`
+  previously reached the fixed-width slicers with no length precheck,
+  causing an out-of-bounds slice (panic in safe builds, OOB read in
+  `ReleaseFast`). Now returns a clean parse error. (APP-01)
+- Cap dotted-key path length at `ParseOptions.max_depth` in
+  `parseKeyPath`. Two sibling deeply-dotted keys inside an inline table
+  could drive `mergeTables` recursion deep enough to overflow the stack
+  (segfault) under default options -- a `max_depth` bypass. Now rejected
+  with `LimitExceeded`. (APP-02)
+
+### Fixed
+
+- Silenced a spurious `failed command` banner emitted on every green test
+  run by switching the differential corpus case-count diagnostics from
+  `std.debug.print` (stderr) to `std.log.debug`. (GAP-0024)
+
+### Changed
+
+- `thread_pool` dependency pinned to the `v0.2.5` release tag (was an
+  untagged commit).
+- Perf: underscore-free integer/float literals skip the scratch-buffer
+  allocation (P-NEW-2); duplicate-key insertion uses a single `getOrPut`
+  probe (P-NEW-4). Nine internal-only parser helpers are no longer `pub`
+  (Q-23).
+
+## [0.1.4] - 2026-05-02
+
+### Changed
+
+- Release bump tracking tagged sibling dependencies. No library API or
+  behavior changes.
+
+## [0.1.3] - 2026-05-02
+
+### Changed
+
+- Release bump tracking tagged sibling dependencies. No library API or
+  behavior changes.
+
+## [0.1.2] - 2026-05-02
+
+### Changed
+
+- Release bump tracking tagged sibling dependencies. No library API or
+  behavior changes.
+
 ## [0.1.1] - 2026-01-26
 
 ### Changed
