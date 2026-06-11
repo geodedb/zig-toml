@@ -127,6 +127,37 @@ build:
   script:
     - zig build check
 
+# Cross-platform build coverage (GAP-0018, GAP-0019).
+#
+# Zig cross-compiles from the Linux runners, so portability breaks
+# (platform-specific std APIs, target-conditional code) are caught at
+# compile time without a Windows/macOS runner or emulator. We compile the
+# library + CLI binaries (`zig build`) and run semantic analysis
+# (`zig build check`) for each target. Running the cross-compiled test
+# binaries needs an emulator (Wine / a native runner) and is tracked as a
+# follow-up; compilation coverage is the cheap, high-value first step.
+build-windows:
+  stage: build
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - zig build check -Dtarget=x86_64-windows
+    - zig build -Dtarget=x86_64-windows
+  needs:
+    - build
+
+build-macos:
+  stage: build
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - zig build check -Dtarget=aarch64-macos
+    - zig build -Dtarget=aarch64-macos
+  needs:
+    - build
+
 # Unit tests
 #
 # Leak gate (Debug): Zig's std.testing.allocator is a
