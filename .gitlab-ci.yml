@@ -8,21 +8,21 @@ default:
 
 include:
   # Security scanning
-  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.43.0
 
   # Code quality
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.2.1
+  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.43.0
 
   # SBOM
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.43.0
 
   # Release
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.27.0
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.43.0
 
 variables:
   ZIG_VERSION: "0.16.0"
@@ -261,7 +261,7 @@ test-release-small:
 # docs/superpowers/plans/2026-04-18-13-toml-test-ci-differential.md.
 conformance-decoder:
   stage: test
-  image: golang:1.22-bookworm
+  image: golang:1.26-bookworm
   before_script:
     - *install-zig
     - go install github.com/toml-lang/toml-test/cmd/toml-test@${TOML_TEST_VERSION}
@@ -303,7 +303,7 @@ conformance-decoder:
 # CASE", not encoder defects.
 conformance-encoder:
   stage: test
-  image: golang:1.22-bookworm
+  image: golang:1.26-bookworm
   before_script:
     - *install-zig
     - go install github.com/toml-lang/toml-test/cmd/toml-test@${TOML_TEST_VERSION}
