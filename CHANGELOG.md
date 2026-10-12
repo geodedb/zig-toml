@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-10-12
+
+### Changed
+
+- Update Thread Pool to v0.2.9 with its pinned source commit and package hash.
+- Authenticate GitLab releases with the job token and route Linux jobs to compatible runners.
+- Isolate Git environment variables in dependency tools and cover the hook behavior with regression tests.
+
 ## [0.1.14] - 2026-10-11
 
 ### Changed
