@@ -14,5 +14,12 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "tests",
+        "bench",
+        "examples",
+        "docs",
+        "CHANGELOG.md",
+        "LICENSE",
+        "README.md",
     },
 }
