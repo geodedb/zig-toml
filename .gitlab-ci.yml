@@ -484,7 +484,7 @@ hook-env-regression:
 # SONNY-4837: verify Zig's filtered release package, including test inputs.
 test-source-package:
   stage: test
-  image: debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+  image: debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
   tags: ["company", "linux", "x86"]
   before_script:
     - *install-zig
